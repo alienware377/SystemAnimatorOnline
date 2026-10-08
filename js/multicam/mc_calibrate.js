@@ -59,7 +59,8 @@ function percentile(a, q) {
 }
 
 // cams_info: [{ width, height, hfov_deg?, hfov_known? }]
-// options: { min_vis, user_height_m, log, search_fov }
+// options: { min_vis, user_height_m, log, search_fov, layout }
+//   layout: optional rough camera layout [{ R, t, f }] (any world frame, metres), used as one more starting guess
 function calibrate(samples, cams_info, options = {}) {
   const log = options.log || (() => {});
   const min_vis = options.min_vis || 0.7;
@@ -91,6 +92,9 @@ function calibrate(samples, cams_info, options = {}) {
     const f = fovs.map((fov, i) => (cams_info[i].hfov_known && cams_info[i].hfov_deg) ? cams_info[i].hfov_deg : fov);
     if (!hyps.some(h => h.fovs.every((x, i) => Math.abs(x - f[i]) < 1))) hyps.push({ fovs: f, why });
   };
+  if (options.layout && options.layout.length == N) {
+    hyps.push({ fovs: options.layout.map((c, i) => 2 * Math.atan(cams_info[i].width / 2 / c.f) * 180 / Math.PI), init: options.layout, why: 'your layout' });
+  }
   add_hyp(cams_info.map(c => c.hfov_deg || 60), 'given');
   if (!all_known) {
     if (options.search_fov !== false) {
@@ -103,15 +107,15 @@ function calibrate(samples, cams_info, options = {}) {
   let best = null;
   for (const h of hyps) {
     let r;
-    try { r = solve_rig(samples, cams_info, matches, h.fovs, min_vis, () => {}); }
+    try { r = solve_rig(samples, cams_info, matches, h.fovs, min_vis, () => {}, h.init); }
     catch (e) { log(`fov guess ${h.fovs.join('/')}: failed (${e.message})`); continue; }
     log(`fov guess ${h.fovs.map(x => x.toFixed(0)).join('/')} (${h.why}): rms ${r.ba.rms.toFixed(2)} px, score ${r.score.toFixed(3)}`);
-    if (!best || r.score < best.score) best = r;
+    if (!best || r.score < best.score) { best = r; best.init = h.init; }
   }
   if (!best) throw new Error('Calibration failed: no camera overlaps enough with camera 1 (keep your whole body visible to at least 2 cameras)');
 
   // rerun the winner with logging so the user sees the details
-  const { cams, ba } = solve_rig(samples, cams_info, matches, best.fovs, min_vis, log);
+  const { cams, ba } = solve_rig(samples, cams_info, matches, best.fovs, min_vis, log, best.init);
   log('fields of view: ' + cams.map((c, i) => `cam${i} ${(2 * Math.atan(c.width / 2 / c.f) * 180 / Math.PI).toFixed(1)} deg`).join(', '));
 
   // 5. metric scale
@@ -181,7 +185,7 @@ function fov_grid_guess(matches, cams_info, N) {
 }
 
 // Steps 1-4 for one field-of-view guess: relative poses, PnP, bundle adjustment.
-function solve_rig(samples, cams_info, matches, fovs, min_vis, log) {
+function solve_rig(samples, cams_info, matches, fovs, min_vis, log, init) {
   const N = cams_info.length;
   const cams = cams_info.map((ci, i) => ({
     R: [1,0,0, 0,1,0, 0,0,1], t: [0,0,0],
@@ -190,10 +194,20 @@ function solve_rig(samples, cams_info, matches, fovs, min_vis, log) {
     width: ci.width, height: ci.height,
     solved: i === 0,
   }));
+  if (init) {
+    // start from the user's rough layout, moved so camera 0 sits at the origin
+    const R0 = init[0].R, t0 = init[0].t;
+    init.forEach((c, i) => {
+      cams[i].R = G.m3_mul(c.R, G.m3_T(R0));
+      cams[i].t = G.v_sub(c.t, G.m3_v(cams[i].R, t0));
+      cams[i].f = c.f;
+      cams[i].solved = true;
+    });
+  }
 
   // 1. relative pose of every camera against camera 0
   const pair = [];
-  for (let i = 1; i < N; i++) {
+  for (let i = 1; i < N && !init; i++) {
     const { m1, m2 } = matches[i];
     const x1 = m1.map(p => [p[0] / cams[0].f, p[1] / cams[0].f]);
     const x2 = m2.map(p => [p[0] / cams[i].f, p[1] / cams[i].f]);
@@ -203,15 +217,17 @@ function solve_rig(samples, cams_info, matches, fovs, min_vis, log) {
   }
 
   // base pair: most inliers with camera 0
-  let base = -1;
-  for (let i = 1; i < N; i++) {
+  let base = init ? 1 : -1;
+  for (let i = 1; i < N && !init; i++) {
     if (pair[i] && (base < 0 || pair[i].inliers.length > pair[base].inliers.length)) base = i;
   }
   if (base < 0) throw new Error('no overlap with camera 1');
 
-  cams[base].R = pair[base].R;
-  cams[base].t = pair[base].t;
-  cams[base].solved = true;
+  if (!init) {
+    cams[base].R = pair[base].R;
+    cams[base].t = pair[base].t;
+    cams[base].solved = true;
+  }
 
   // 2. triangulate (frame, joint) points from solved cameras
   const pts = new Map(); // key -> [X,Y,Z]

@@ -9756,6 +9756,7 @@ else if (System._browser.camera.VMC_receiver.expression_active) {
   }
 }
 
+if (window.MC_face) MC_face.local_weights(blendshape_weight, expressionManager);
 for (const name in blendshape_weight) {
 //if (name == name_blink) {DEBUG_show(Date.now())} else
   expressionManager.setValue(name, blendshape_weight[name])
@@ -9884,6 +9885,7 @@ blendshape_weight[name],
   }
 
 
+  if (window.MC_face) MC_face.vmc_morphs(morph_msgs);
   let tracker_msgs = [];
   let tracker_index = 0;
   MMD_SA.THREEX._object3d_list_?.forEach(x_object=>{

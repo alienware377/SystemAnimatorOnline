@@ -108,7 +108,17 @@ function run(name, true_cams, opts) {
 
   const mode = process.env.FOV_MODE || "fixed";
   const info = true_cams.map(c => ({ width: c.width, height: c.height, hfov_deg: mode === "true" ? 2 * Math.atan(c.width / 2 / c.f) * 180 / Math.PI : (+process.env.FOV_GUESS || 60) }));
-  const cal = CAL.calibrate(samples, info, { log: (s) => console.log("  " + s), user_height_m: opts.height, search_fov: mode === "search" });
+  // optional rough layout: true cameras moved ~25 cm, turned a few degrees, zoom 10% off
+  let layout;
+  if (opts.layout) {
+    layout = true_cams.map(c => {
+      const C = G.v_add(G.camera_center(c), [gauss() * 0.25, gauss() * 0.15, gauss() * 0.25]);
+      const look = G.v_add(C, G.v_scale(G.v_norm([c.R[6], c.R[7], c.R[8]]), 3));
+      const r = look_at(C, G.v_add(look, [gauss() * 0.2, gauss() * 0.1, gauss() * 0.2]), 2 * Math.atan(c.width / 2 / c.f) * 180 / Math.PI * 1.1, c.width, c.height);
+      return { R: r.R, t: r.t, f: r.f };
+    });
+  }
+  const cal = CAL.calibrate(samples, info, { log: (s) => console.log("  " + s), user_height_m: opts.height, search_fov: mode === "search", layout });
   const est = cal.cameras;
 
   let ok = true;
@@ -182,6 +192,16 @@ all = run('2 cams close together (stereo-ish, 0.6 m apart)', [
   look_at([-0.3, 1.25, 2.5], [0, 1.0, 0], 65, W, H),
   look_at([0.3, 1.25, 2.5], [0, 1.0, 0], 65, W, H),
 ], { frames: 300, noise: 1.5, outliers: 0.02 }) && all;
+
+all = run('2 cams, front + 70 deg side, with a rough layout hint', [
+  look_at([0, 1.3, 2.6], [0, 1.0, 0], 62, W, H),
+  look_at([2.4, 1.8, 1.0], [0, 1.0, 0], 75, W, H),
+], { frames: 300, noise: 2, outliers: 0.03, layout: true }) && all;
+
+all = run('2 cams, front + back-side (150 deg apart), with a rough layout hint', [
+  look_at([0, 1.4, 2.6], [0, 1.0, 0], 65, W, H),
+  look_at([1.3, 1.6, -2.3], [0, 1.0, 0], 70, W, H),
+], { frames: 300, noise: 2, outliers: 0.03, layout: true }) && all;
 
 console.log('\n' + (all ? 'SELFTEST OK' : 'SELFTEST FAILED'));
 process.exit(all ? 0 : 1);

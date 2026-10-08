@@ -35,6 +35,8 @@ const settings = Object.assign({
   model_quality: '',
   width: 1280, height: 720,
   show_button: true,
+  layout: [],             // rough camera layout from the Layout tab: [{ x, z, h, fov }] in metres / degrees
+  layout_hint: true,      // give that layout to Calibrate as a starting guess
 }, load_settings());
 
 function load_settings() {
@@ -52,6 +54,8 @@ const extra = [];          // extra cameras
 let fuser = null;
 let recording = null;      // { samples, until, cams_info }
 let calibrating = false;
+// latest frame, for the live views
+const live = { cam0_kp: null, cam0_flip: false, fused: null, t: 0 };
 const stats = { cam0_fps: 0, cam0_n: 0, cam0_t: 0, tri: 0, mono: 0, active: false, last_error: '' };
 
 function camera() { return window.System?._browser?.camera; }
@@ -63,6 +67,47 @@ function cam0_device_id() {
 function cam0_label() {
   try { return camera()?.stream?.getVideoTracks()[0]?.label || ''; }
   catch (e) { return ''; }
+}
+
+// rough layout (Layout tab) -> cameras in the calibration format
+function current_sizes() {
+  const C = camera();
+  return [{ width: C?.video_canvas?.width || 1280, height: C?.video_canvas?.height || 720 }]
+    .concat(extra.map(c => ({ width: c.w || c.video.videoWidth || 1280, height: c.h || c.video.videoHeight || 720 })));
+}
+
+function default_layout(i) {
+  const spots = [{ x: 0, z: 2.5, h: 1.3 }, { x: 2.2, z: 1.2, h: 1.5 }, { x: -2.2, z: 1.2, h: 1.5 }, { x: 0, z: -2.5, h: 1.5 }];
+  return Object.assign({ fov: 65 }, spots[i] || { x: 2.5 * Math.cos(i), z: 2.5 * Math.sin(i), h: 1.5 });
+}
+
+function layout_entry(i) {
+  if (!settings.layout[i]) settings.layout[i] = default_layout(i);
+  return settings.layout[i];
+}
+
+function layout_cams(sizes) {
+  sizes = sizes || current_sizes();
+  return sizes.map((sz, i) => {
+    const L = layout_entry(i);
+    const pos = [+L.x, +L.h, +L.z];
+    let z = G.v_sub([0, 1.0, 0], pos);
+    z = G.v_norm(G.v_len(z) > 1e-6 ? z : [0, 0, -1]);
+    const x = G.v_norm(G.v_cross(z, [0, 1, 0]));
+    const y = G.v_cross(z, x);
+    const R = [...x, ...y, ...z];
+    return { R, t: G.v_scale(G.m3_v(R, pos), -1), f: G.default_focal(sz.width, +L.fov || 65), width: sz.width, height: sz.height,
+      center: pos, solved: true, hfov_deg: +L.fov || 65 };
+  });
+}
+
+// skip calibration and track straight from the rough layout (less accurate)
+function use_layout_as_calibration() {
+  const cams = layout_cams();
+  cams[0].label = cam0_label();
+  extra.forEach((c, i) => { cams[i + 1].label = c.label; cams[i + 1].deviceId = c.deviceId; });
+  set_calibration({ version: 1, created: new Date().toISOString(), rms_px: NaN, from_layout: true, cameras: cams });
+  ui_log('Using your rough layout as the calibration. A real calibration is more accurate.');
 }
 
 function set_calibration(cal) {
@@ -222,9 +267,13 @@ function _process(result) {
   stats.cam0_n++;
   if (now - stats.cam0_t > 1000) { stats.cam0_fps = stats.cam0_n * 1000 / (now - stats.cam0_t); stats.cam0_n = 0; stats.cam0_t = now; }
 
-  if (!extra.length) { stats.active = false; return result; }
-
   const v0 = cam0_view(result.posenet);
+  const kp = result.posenet?.keypoints;
+  live.cam0_kp = (kp && kp.length == 33) ? kp.map(k => ({ x: k.position.x, y: k.position.y, score: k.score })) : null;
+  live.cam0_flip = !!camera()?.video_flipped;
+  live.fused = null;
+  live.t = now;
+  if (!extra.length) { stats.active = false; return result; }
   // capture time of camera 1's frame: now minus the time XR Animator's worker spent on it
   const t_cap = now - (result._t || 0);
   const views_norm = [v0 ? { landmarks: v0.landmarks, worldLandmarks: v0.worldLandmarks } : null]
@@ -253,6 +302,7 @@ function _process(result) {
   stats.tri = fused.source.filter(s => s == 'tri').length;
   stats.mono = fused.source.filter(s => s == 'mono').length;
   stats.active = true;
+  live.fused = fused;
 
   result.posenet = build_posenet(fused, result.posenet, cal.cameras[0]);
   return result;
@@ -378,7 +428,10 @@ function finish_recording() {
   worker.postMessage({
     samples,
     cams_info: rec.cams_info.map(c => ({ width: c.width, height: c.height })),
-    options: { user_height_m: (h > 100 && h < 250) ? h / 100 : undefined },
+    options: {
+      user_height_m: (h > 100 && h < 250) ? h / 100 : undefined,
+      layout: settings.layout_hint ? layout_cams(rec.cams_info).map(c => ({ R: c.R, t: c.t, f: c.f })) : undefined,
+    },
   });
 }
 
@@ -457,6 +510,7 @@ function build_ui() {
     el('div', { className: 'mc_small', textContent: 'XR Animator\'s own camera is camera 1. Tick the other cameras here.' }),
     list_el,
     el('button', { textContent: 'Refresh list', onclick: () => ui_refresh(true) }),
+    el('button', { textContent: 'Live view', title: 'Cameras, 3D view, layout and face (Ctrl+Shift+L)', onclick: () => window.MC_view?.toggle() }),
     el('h4', { textContent: 'Calibration' }),
     el('label', {}, ['Your height (cm, optional): ',
       el('input', { type: 'text', value: settings.user_height_cm, oninput: (e) => { settings.user_height_cm = e.target.value; save_settings(); } })]),
@@ -523,7 +577,8 @@ function _ui_status() {
   else if (calibrating) lines.push('Calculating calibration...');
   else if (!cal) lines.push('Not calibrated yet.');
   else {
-    lines.push(`Calibrated for ${cal.cameras.length} cameras (${cal.rms_px.toFixed(1)} px).`);
+    lines.push(cal.from_layout ? `Using your rough layout for ${cal.cameras.length} cameras (not calibrated).`
+      : `Calibrated for ${cal.cameras.length} cameras (${cal.rms_px.toFixed(1)} px).`);
     if (cal.cameras.length != extra.length + 1) lines.push(`Needs ${cal.cameras.length - 1} extra camera(s) open, you have ${extra.length}.`);
     if (cal.cameras[0].label && cam0_label() && cal.cameras[0].label != cam0_label()) lines.push('Warning: camera 1 is a different camera than when calibrated.');
     lines.push(stats.active ? `3D active: ${stats.tri} joints triangulated, ${stats.mono} from one camera.` : '3D not active right now.');
@@ -603,6 +658,9 @@ window.MC_multicam = {
   get stats() { return stats; },
   toggle_panel,
   _cam0_view: cam0_view,
+  live, MIRROR, BLAZEPOSE, camera,
+  layout_entry, layout_cams, use_layout_as_calibration, save_settings, ui_log,
+  get calibration() { return settings.calibration; },
 };
 
 })();

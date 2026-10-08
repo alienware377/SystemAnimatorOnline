@@ -56,9 +56,11 @@ Your extra cameras reopen automatically next time.
 
 SENDING TO VNYAN ON ANOTHER PC
 ------------------------------
-In XR Animator, turn on the VMC sender and set:
+In XR Animator's VMC protocol menu, turn on the VMC sender and set:
 - Host: the main PC's IP address
 - Port: 39539 (VNyan's default VMC receive port)
+- Make sure sending avatar data is switched on too. In v0.35.0 it can be
+  off, and then only face data goes out and the body doesn't move in VNyan.
 
 On the main PC: in VNyan, turn on the VMC receiver (port 39539). If nothing
 arrives, allow VNyan through Windows Firewall (or allow UDP port 39539).

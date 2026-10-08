@@ -14,7 +14,7 @@
 
 'use strict';
 
-const G = (typeof module === 'object' && module.exports) ? require('./mc_geometry.js') : root.MC_geometry;
+const G = (typeof self !== 'undefined' && self.MC_geometry) || require('./mc_geometry.js');
 
 // BlazePose joints that are well defined from any side
 const CALIB_JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
@@ -501,7 +501,8 @@ function level_world(cams, frames3d) {
 
 const API = { calibrate, CALIB_JOINTS, SCALE_BONES };
 
+// Electron pages with nodeIntegration have `module` too, so always set the global as well
 if (typeof module === 'object' && module.exports) module.exports = API;
-else root.MC_calibrate = API;
+if (typeof self !== 'undefined') self.MC_calibrate = API;
 
 })(typeof self !== 'undefined' ? self : this);

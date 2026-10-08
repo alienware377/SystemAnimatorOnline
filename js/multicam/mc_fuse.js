@@ -11,7 +11,7 @@
 
 'use strict';
 
-const G = (typeof module === 'object' && module.exports) ? require('./mc_geometry.js') : root.MC_geometry;
+const G = (typeof self !== 'undefined' && self.MC_geometry) || require('./mc_geometry.js');
 
 function create(calibration, options = {}) {
   const cams = calibration.cameras.map(c => ({ R: c.R, t: c.t, f: c.f, width: c.width, height: c.height, solved: c.solved }));
@@ -138,7 +138,8 @@ function to_view(landmarks, world_landmarks, cam) {
 
 const API = { create, to_view };
 
+// Electron pages with nodeIntegration have `module` too, so always set the global as well
 if (typeof module === 'object' && module.exports) module.exports = API;
-else root.MC_fuse = API;
+if (typeof self !== 'undefined') self.MC_fuse = API;
 
 })(typeof self !== 'undefined' ? self : this);

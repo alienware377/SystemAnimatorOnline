@@ -722,7 +722,8 @@ const API = {
   pnp_dlt, bundle_adjust, solve_multi, transform_rig, seeded_random,
 };
 
+// Electron pages with nodeIntegration have `module` too, so always set the global as well
 if (typeof module === 'object' && module.exports) module.exports = API;
-else root.MC_geometry = API;
+if (typeof self !== 'undefined') self.MC_geometry = API;
 
 })(typeof self !== 'undefined' ? self : this);

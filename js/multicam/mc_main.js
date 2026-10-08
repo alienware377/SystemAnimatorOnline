@@ -19,6 +19,9 @@ const G = window.MC_geometry, FUSE = window.MC_fuse;
 const STORE_KEY = 'XRA_multicam_v1';
 const BLAZEPOSE = ['nose','left_eye_inner','left_eye','left_eye_outer','right_eye_inner','right_eye','right_eye_outer','left_ear','right_ear','mouth_left','mouth_right','left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_pinky','right_pinky','left_index','right_index','left_thumb','right_thumb','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle','left_heel','right_heel','left_foot_index','right_foot_index'];
 const PART_NAMES = BLAZEPOSE.map(n => n.replace(/\_(\w)/, (m, p1) => p1.toUpperCase()));
+// left <-> right partner of every BlazePose joint. In a mirrored image the tracker
+// calls your right hand "left", so mirrored data needs both x flipped and labels swapped.
+const MIRROR = BLAZEPOSE.map(n => BLAZEPOSE.indexOf(n.replace(/left|right/, (m) => (m == 'left') ? 'right' : 'left')));
 const CALIB_SECONDS = 30;
 
 // ---------- settings ----------
@@ -192,13 +195,14 @@ function cam0_view(posenet) {
   if (!canvas || !canvas.width) return null;
   const W = canvas.width, H = canvas.height;
   const flip = !!C.video_flipped;
-  const landmarks = kp.map(k => ({
-    x: flip ? 1 - k.position.x / W : k.position.x / W,
-    y: k.position.y / H,
-    visibility: k.score ?? 0,
-  }));
+  // camera 1 is usually mirrored: undo it so every camera sees the real, un-mirrored person
+  const src = (j) => flip ? MIRROR[j] : j;
+  const landmarks = kp.map((_, j) => {
+    const k = kp[src(j)];
+    return { x: flip ? 1 - k.position.x / W : k.position.x / W, y: k.position.y / H, visibility: k.score ?? 0 };
+  });
   const w3 = posenet.keypoints3D_raw || posenet.keypoints3D;
-  const worldLandmarks = (w3 && w3.length == 33) ? w3.map(p => ({ x: flip ? -p.x : p.x, y: p.y, z: p.z })) : null;
+  const worldLandmarks = (w3 && w3.length == 33) ? w3.map((_, j) => { const p = w3[src(j)]; return { x: flip ? -p.x : p.x, y: p.y, z: p.z }; }) : null;
   return { landmarks, worldLandmarks, W, H, flip };
 }
 
@@ -288,7 +292,9 @@ function build_posenet(fused, original, cal0) {
 
   const keypoints = [], keypoints3D = [];
   for (let j = 0; j < 33; j++) {
-    const X = fused.points[j];
+    // slot j in XR Animator's (possibly mirrored) convention comes from real joint s
+    const s = flip ? MIRROR[j] : j;
+    const X = fused.points[s];
     const part = orig_kp?.[j]?.part || PART_NAMES[j];
     if (!X) {
       // nobody sees it: keep camera 1's own estimate
@@ -298,7 +304,7 @@ function build_posenet(fused, original, cal0) {
       keypoints3D.push(o3 || { x: 0, y: 0, z: 0, name: BLAZEPOSE[j], score: 0 });
       continue;
     }
-    const src = fused.source[j];
+    const src = fused.source[s];
     const score = (src == 'tri') ? 0.95 : (src == 'mono') ? 0.75 : 0.45;
 
     const pc = G.cam_to_local(vcam, X);
@@ -432,7 +438,7 @@ function build_ui() {
 #mc_panel .mc_cam video{width:96px;height:54px;background:#000;border-radius:4px;object-fit:cover}
 #mc_panel .mc_small{color:#99a;font-size:11px}
 #mc_panel pre{white-space:pre-wrap;background:#111;border-radius:6px;padding:6px;max-height:160px;overflow:auto;font-size:11px;margin:4px 0 0}
-#mc_btn{position:fixed;left:8px;bottom:8px;z-index:2147483000;background:rgba(40,40,60,.8);color:#fff;border:0;border-radius:6px;
+#mc_btn{position:fixed;left:8px;bottom:48px;z-index:2147483000;background:rgba(40,40,60,.8);color:#fff;border:0;border-radius:6px;
  padding:4px 8px;font:12px system-ui,sans-serif;cursor:pointer}
 ` });
   document.head.appendChild(css);
@@ -596,6 +602,7 @@ window.MC_multicam = {
   get extra() { return extra; },
   get stats() { return stats; },
   toggle_panel,
+  _cam0_view: cam0_view,
 };
 
 })();

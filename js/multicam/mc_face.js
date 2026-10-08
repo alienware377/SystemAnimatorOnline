@@ -28,6 +28,8 @@ const ARKIT = ['browDownLeft','browDownRight','browInnerUp','browOuterUpLeft','b
   'mouthRollLower','mouthRollUpper','mouthShrugLower','mouthShrugUpper','mouthSmileLeft','mouthSmileRight','mouthStretchLeft','mouthStretchRight',
   'mouthUpperUpLeft','mouthUpperUpRight','noseSneerLeft','noseSneerRight','tongueOut'];
 const UNTRACKED = new Set(['tongueOut']);
+// tongueOut becomes trackable with the experimental tongue detector (mc_tongue.js)
+const is_untracked = (n) => UNTRACKED.has(n) && !(n == 'tongueOut' && window.MC_tongue?.calibrated && window.MC_tongue?.settings.enabled);
 
 // combined sources, built from the ARKit values (names start with ~)
 const avg = (...a) => a.reduce((s, x) => s + x, 0) / a.length;
@@ -118,7 +120,7 @@ function source_label(src) {
   if (!src) return '(not matched)';
   if (src.startsWith('~')) return DERIVED_LABEL[src] || src;
   if (src.startsWith('xra:')) return 'XR Animator: ' + src.slice(4);
-  return src + (UNTRACKED.has(src) ? ' (not tracked)' : '');
+  return src + (is_untracked(src) ? ' (not tracked)' : '');
 }
 
 // ---------- settings ----------
@@ -304,7 +306,7 @@ function all_sources() {
 
 window.MC_face = {
   on_arkit, local_weights, vmc_morphs,
-  settings, save, ARKIT, PACKS, DERIVED_LABEL, UNTRACKED,
+  settings, save, ARKIT, PACKS, DERIVED_LABEL, UNTRACKED, is_untracked,
   arkit, out, source_value, source_label, auto_source,
   add_targets, add_pack, auto_match_all, remove_target, all_sources, default_target,
   get local_names() { return local_names; },

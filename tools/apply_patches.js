@@ -15,7 +15,11 @@ function original(file) {
   const bak = path.join(root, file + '.multicam-backup');
   if (fs.existsSync(bak)) return fs.readFileSync(bak, 'utf8');
   // check the original out so it gets the working copy's own line endings
-  try { execFileSync('git', ['-C', root, 'checkout', ORIGINAL_COMMIT, '--', file], { stdio: 'ignore' }); }
+  try {
+    execFileSync('git', ['-C', root, 'checkout', ORIGINAL_COMMIT, '--', file], { stdio: 'ignore' });
+    // checkout also stages the original; put the index back so commits aren't silently reverted
+    execFileSync('git', ['-C', root, 'reset', '-q', '--', file], { stdio: 'ignore' });
+  }
   catch (e) {}
   return fs.readFileSync(path.join(root, file), 'utf8');
 }

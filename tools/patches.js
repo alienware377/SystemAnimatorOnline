@@ -6,7 +6,7 @@
 // where:  'after' or 'before' the anchor
 // insert: text to add
 
-const SCRIPTS = ['mc_geometry.js', 'mc_fuse.js', 'mc_face.js', 'mc_main.js', 'mc_view.js']
+const SCRIPTS = ['mc_geometry.js', 'mc_fuse.js', 'mc_face.js', 'mc_tongue.js', 'mc_main.js', 'mc_view.js']
   .map(f => `<script src="js/multicam/${f}"></script>`).join('\n');
 
 module.exports = [

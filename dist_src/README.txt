@@ -75,8 +75,8 @@ LIVE VIEW (Ctrl+Shift+L, or "Live view" in the 3D panel)
 
 FACE BLENDSHAPES
 ----------------
-XR Animator tracks the iPhone ARKit face values (51 of the 52; the tongue
-can't be seen by a webcam). In the Face tab you choose which blendshape
+XR Animator tracks the iPhone ARKit face values (51 of the 52; tongueOut
+comes from the experimental tongue tracking below). In the Face tab you choose which blendshape
 names get sent to VNyan, and what drives each one:
 
 1. Add a set of names: "From my avatar" (everything on the avatar loaded
@@ -98,6 +98,13 @@ names get sent to VNyan, and what drives each one:
 
 The bars show each result live, with the raw input as a faint bar behind
 it. Open "Live ARKit values" to see all 52 inputs.
+
+Tongue (experimental): the face tracker can't see tongues, so the Face tab
+has a separate "Tongue tracking" section. Tick "Track tongueOut", then
+"Calibrate tongue": first keep your tongue in (move your mouth a little),
+then stick it out when asked. After that tongueOut works like any other
+value. Calibrate again if the lighting changes a lot. Good light helps;
+lipstick or a beard can confuse it.
 
 
 SENDING TO VNYAN ON ANOTHER PC

@@ -483,6 +483,52 @@ function build_layout() {
   return { page, draw, on_show: () => { rows_key = ''; } };
 }
 
+// ---------- Tongue (inside the Face tab) ----------
+
+function build_tongue() {
+  const T = () => window.MC_tongue;
+  const enabled = el('input', { type: 'checkbox', onchange: (e) => T()?.set_enabled(e.target.checked) });
+  const status = el('div', { className: 'small' });
+  const log = el('div', { className: 'small', style: 'color:#fde68a;min-height:15px' });
+  const b = (() => { const i = el('i'), s = el('s'), span = el('span'); return { root: el('div', { className: 'bar', style: 'width:160px;display:inline-block;vertical-align:middle' }, [s, i, span]), i, span }; })();
+  const cv = el('canvas', { width: 96, height: 72, style: 'background:#000;border-radius:4px;width:96px;height:72px' });
+  const box = el('details', {}, [
+    el('summary', { textContent: 'Tongue tracking (experimental)' }),
+    el('div', { className: 'small', textContent: 'The face tracker has no tongue, so this watches camera 1\'s mouth area and learns what your tongue looks like. Calibrate once per light setup. Lipstick, beards or dim light can fool it.' }),
+    el('div', { style: 'display:flex;gap:10px;align-items:center;margin:4px 0' }, [
+      cv,
+      el('div', {}, [
+        el('label', {}, [enabled, ' Track tongueOut']),
+        el('div', {}, [
+          el('button', { className: 'b', textContent: 'Calibrate tongue (8 s)', onclick: () => T()?.start_calibration((m) => { log.textContent = m; }) }),
+          el('button', { className: 'b', textContent: 'Forget', onclick: () => T()?.clear() }),
+        ]),
+        el('div', {}, ['tongueOut ', b.root]),
+        status,
+      ]),
+    ]),
+    log,
+  ]);
+  const draw = () => {
+    const t = T();
+    if (!t) { status.textContent = 'Tongue module not loaded.'; return; }
+    t.want_preview = box.open;
+    if (!box.open) return;
+    enabled.checked = !!t.settings.enabled;
+    const q = t.settings.model?.quality;
+    status.textContent = !t.settings.enabled ? 'Off.' : !t.ready ? 'Loading...' : !t.face_found ? 'Looking for your face in camera 1...'
+      : t.calibrating ? 'Calibrating...' : !t.calibrated ? 'Not calibrated yet.' : `Working (calibration separation ${q ? q.toFixed(1) : '?'}).`;
+    const v = t.value || 0;
+    b.i.style.width = (v * 100) + '%'; b.span.textContent = Math.round(v * 100) + '%';
+    const p = t.preview;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 96, 72);
+    if (p) { const s = Math.min(96 / p.width, 72 / p.height); ctx.drawImage(p, (96 - p.width * s) / 2, (72 - p.height * s) / 2, p.width * s, p.height * s); }
+  };
+  box._draw = draw;
+  return box;
+}
+
 // ---------- Face ----------
 
 function build_face() {
@@ -528,6 +574,7 @@ function build_face() {
       file_in,
     ]),
     el('details', {}, [el('summary', { textContent: 'Live ARKit values from the camera' }), ark_grid]),
+    build_tongue(),
     el('div', { className: 'small', style: 'margin:6px 0 2px' }, 'Blendshapes sent to VNyan (VMC). Red names have no match yet: pick a source. ⚙ = fine-tune. The bar shows the result, the faint bar shows the raw input.'),
     rows,
   ]);
@@ -569,7 +616,7 @@ function build_face() {
       for (const n of face.ARKIT) {
         const b = bar();
         ark_refs[n] = b;
-        ark_grid.append(el('div', { className: 'ark' }, [el('span', { textContent: n + (face.UNTRACKED.has(n) ? ' *' : ''), title: face.UNTRACKED.has(n) ? 'Not tracked by the camera' : '' }), b.root]));
+        ark_grid.append(el('div', { className: 'ark' }, [el('span', { textContent: n + (face.UNTRACKED.has(n) ? ' *' : ''), title: face.UNTRACKED.has(n) ? 'Needs the experimental tongue tracking below' : '' }), b.root]));
       }
     }
     rows.textContent = '';
@@ -627,7 +674,7 @@ function build_face() {
     if (dirty) { dirty = false; rebuild(); }
     const n = face.settings.targets.length, unmatched = face.settings.targets.filter(t => !t.source).length;
     status.textContent = (face.face_alive ? `Face tracking: ${face.arkit_fps.toFixed(0)} fps.` : 'Face tracking is not running (use a face mode in XR Animator).') +
-      ` ${n} blendshape${n == 1 ? '' : 's'} listed` + (unmatched ? `, ${unmatched} without a match.` : '.') + ' * = not trackable with a webcam.';
+      ` ${n} blendshape${n == 1 ? '' : 's'} listed` + (unmatched ? `, ${unmatched} without a match.` : '.') + ' * = needs the tongue tracking below.';
     const set = (b, x, raw) => {
       const v = Math.max(0, Math.min(1, x || 0));
       b.i.style.width = (v * 100) + '%';
@@ -635,6 +682,7 @@ function build_face() {
       b.span.textContent = Math.round(v * 100) + '%';
     };
     if (ark_grid.closest('details').open) for (const k in ark_refs) set(ark_refs[k], face.arkit[k]);
+    page.querySelectorAll('details').forEach(d => d._draw?.());
     for (const r of row_refs) set(r.b, face.out[r.t.name], face.source_value(r.t.source));
   }
 

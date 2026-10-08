@@ -1,5 +1,23 @@
 ﻿# XR Animator
 
+> ## Multi-Camera fork
+>
+> This is a fork of [XR Animator](https://github.com/ButzYung/SystemAnimatorOnline) v0.35.0 that adds **true 3D body tracking with 2 or more webcams**, plus live views and full face blendshape control. Everything else is the original XR Animator by ButzYung.
+>
+> **What it adds**
+> - **Multi-camera 3D:** every extra webcam runs its own body tracker. After a 30 second walk-around calibration (no checkerboard), joints seen by 2+ cameras are triangulated in real 3D, so depth, turning sideways and hidden arms are much steadier. XR Animator's own camera stays camera 1 for face and hands.
+> - **Rough room layout:** drag the cameras roughly into place on a top-down sketch. It gives calibration a head start, or works as a quick rough calibration on its own.
+> - **Live view:** each camera with its tracked skeleton and the 3D result drawn back on top, an orbitable 3D room view, and the layout editor.
+> - **Face blendshapes:** live ARKit values, and mapping onto any blendshape names (ARKit / Perfect Sync, VRM 0 and VRM 1 presets, MMD morphs, the avatar's own, or custom). Matching is automatic, with manual overrides and per-blendshape strength, input range, curve and smoothing, like VNyan. Results go out over VMC and onto XR Animator's avatar.
+> - **Tongue tracking (experimental):** a separate mouth detector with a quick tongue-in / tongue-out calibration drives `tongueOut`, which the face tracker can't see on its own.
+> - **Fix:** blendshape names with Japanese or other non-English letters now arrive intact over VMC.
+>
+> **Install:** download `XRA-MultiCam.zip` from [Releases](../../releases), unzip it next to (or anywhere near) your XR Animator v0.35.0 desktop app, and run `install.bat`. It finds XR Animator, backs up the files it touches, and `uninstall.bat` puts them back. Full instructions, including sending VMC to VNyan on another PC over Wi-Fi or a USB-to-Ethernet cable, are in the zip's `README.txt`. This repository itself is also the already-patched app folder.
+>
+> In XR Animator: **Ctrl+Shift+M** opens the multi-camera panel, **Ctrl+Shift+L** the live view.
+>
+> **License:** same as XR Animator, [CC BY-NC-SA 4.0](http://creativecommons.org/licenses/by-nc-sa/4.0/): credit the original, non-commercial use only, share changes under the same license. The new code lives in `js/multicam/`; the hooks into XR Animator's own files are listed in `tools/patches.js`.
+
 ### Full-body, real-time motion tracking with a single webcam, on your PC and web browser
 
 <p align="center">

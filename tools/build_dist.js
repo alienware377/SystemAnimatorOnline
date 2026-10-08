@@ -32,6 +32,6 @@ for (const f of ['install.ps1', 'install.bat', 'uninstall.bat', 'README.txt'].ma
   if (f.endsWith('.ps1') && /[^\x00-\x7F]/.test(s.replace(/^\uFEFF/, ''))) throw new Error('non-ASCII in ' + f);
 }
 
-execFileSync('powershell', ['-NoProfile', '-Command',
-  `Compress-Archive -Path '${out}' -DestinationPath '${path.join(root, 'dist', 'XRA-MultiCam.zip')}' -Force`]);
+// Windows' own tar writes proper forward-slash zip paths (Compress-Archive on PS 5.1 doesn't)
+execFileSync(path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'tar.exe'), ['-a', '-c', '-f', path.join(root, 'dist', 'XRA-MultiCam.zip'), '-C', path.join(root, 'dist'), 'XRA-MultiCam']);
 console.log('built', path.join(root, 'dist', 'XRA-MultiCam.zip'));

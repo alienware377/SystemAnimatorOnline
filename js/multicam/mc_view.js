@@ -19,6 +19,7 @@ const G = () => window.MC_geometry;
 
 const EDGES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[27,31],
   [28,30],[30,32],[28,32],[15,17],[15,19],[15,21],[16,18],[16,20],[16,22],[0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10]];
+const HAND_EDGES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 const COLOR = { tri: '#4ade80', mono: '#facc15', hold: '#fb923c', none: '#9ca3af', raw: '#38bdf8', proj: '#ffffff' };
 
 let win = null, body = null, tabs = {}, active = 'cameras', visible = false;
@@ -158,7 +159,7 @@ function build_cameras() {
   const wrap = el('div', { style: 'position:absolute;inset:8px 8px 26px 8px' }, [cv]);
   const legend = el('div', { className: 'small', style: 'position:absolute;left:8px;bottom:6px', innerHTML:
     `<span style="color:${COLOR.tri}">●</span> measured in 3D &nbsp; <span style="color:${COLOR.mono}">●</span> one camera only &nbsp; ` +
-    `<span style="color:${COLOR.raw}">●</span> tracked (3D off) &nbsp; <span style="color:#fff">×</span> 3D result seen from this camera` });
+    `<span style="color:${COLOR.raw}">●</span> tracked (3D off) &nbsp; <span style="color:#f472b6">●</span> hands &nbsp; <span style="color:#fff">×</span> 3D result seen from this camera` });
   const page = el('div', { className: 'mcv_page' }, [wrap, legend]);
 
   function draw_skeleton(ctx, pts, color_of, ox, oy, s) {
@@ -214,12 +215,24 @@ function build_cameras() {
       }
       if (pts) draw_skeleton(ctx, pts, color_of, ox, oy, s);
 
+      // hands this camera found
+      const hand_sets = [];
+      if (tile.kind == 0) (live.cam0_hands || []).forEach(h => { if (h.kp) hand_sets.push(h.kp.map(k => ({ x: k[0], y: k[1] }))); });
+      else (tile.cam.history?.[tile.cam.history.length - 1]?.hands || []).forEach(h => hand_sets.push(h.landmarks.map(l => ({ x: l.x * sw, y: l.y * sh }))));
+      ctx.strokeStyle = '#f472b6'; ctx.lineWidth = 1.5;
+      for (const hp of hand_sets) {
+        ctx.beginPath();
+        for (const [a, b] of HAND_EDGES) { ctx.moveTo(ox + hp[a].x * s, oy + hp[a].y * s); ctx.lineTo(ox + hp[b].x * s, oy + hp[b].y * s); }
+        ctx.stroke();
+      }
+
       // 3D result projected back into this camera
       const cc = cal?.cameras?.[tile.kind];
       if (fused && cc && cc.solved) {
         ctx.strokeStyle = COLOR.proj; ctx.lineWidth = 1;
         const sx = sw / cc.width;
-        for (const X of fused.points) {
+        const all_pts = fused.points.concat(...['L', 'R'].map(sd => live.hands?.[sd]?.points || []));
+        for (const X of all_pts) {
           if (!X) continue;
           const p = G().project(cc, X);
           if (p[2] <= 0) continue;
@@ -354,6 +367,18 @@ function build_3d() {
         if (!p || !q) continue;
         ctx.strokeStyle = (fused.source[a] == 'tri' && fused.source[b] == 'tri') ? COLOR.tri : COLOR.mono;
         ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+      }
+      const hands = mc.live.hands;
+      for (const sd of ['L', 'R']) {
+        const hh = hands?.[sd];
+        if (!hh) continue;
+        ctx.strokeStyle = hh.source == 'tri' ? '#f472b6' : '#fda4af'; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (const [a, b] of HAND_EDGES) {
+          const p = P(hh.points[a]), q = P(hh.points[b]);
+          if (p && q) { ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); }
+        }
+        ctx.stroke();
       }
       // shadow on the floor
       ctx.fillStyle = 'rgba(91,95,199,.35)';

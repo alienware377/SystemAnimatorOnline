@@ -203,5 +203,54 @@ all = run('2 cams, front + back-side (150 deg apart), with a rough layout hint',
   look_at([1.3, 1.6, -2.3], [0, 1.0, 0], 70, W, H),
 ], { frames: 300, noise: 2, outliers: 0.03, layout: true }) && all;
 
+
+// ---------- hands ----------
+function hand_test() {
+  console.log('\n=== hands: 2 cameras, triangulated and one-camera fallback ===');
+  const cams = [look_at([0, 1.3, 2.6], [0, 1.0, 0], 62, W, H), look_at([2.4, 1.8, 1.0], [0, 1.0, 0], 75, W, H)];
+  const cal = { cameras: cams.map(c => Object.assign({ solved: true }, c)) };
+  const HF = FUSE.create_hands(cal);
+  // a hand: wrist + 5 fingers x 4 joints, palm facing the camera-ish, ~18 cm long
+  function hand(wrist, yaw) {
+    const pts = [[0, 0, 0]];
+    const base = [[0.03, 0.02], [0.025, 0.08], [0.005, 0.085], [-0.015, 0.08], [-0.033, 0.07]];
+    base.forEach(([x, y], f) => {
+      for (let k = 0; k < 4; k++) {
+        const len = f == 0 ? 0.03 * k : 0.025 * k;
+        pts.push([x + (f == 0 ? 0.02 * k : 0), y + len, 0.01 * k]);
+      }
+    });
+    const c = Math.cos(yaw), s2 = Math.sin(yaw);
+    return pts.map(p => G.v_add(wrist, [c * p[0] + s2 * p[2], p[1], -s2 * p[0] + c * p[2]]));
+  }
+  let ok = true;
+  const errs_tri = [], errs_mono = [];
+  for (let i = 0; i < 60; i++) {
+    const wrist = [0.3 + 0.2 * Math.sin(i / 7), 1.1 + 0.2 * Math.cos(i / 5), 0.2];
+    const P = hand(wrist, i / 10);
+    const view = (cam, with_world) => ({
+      score: 0.9,
+      lm: P.map(X => { const q = G.project(cam, X); return { u: q[0] + gauss() * 1.5, v: q[1] + gauss() * 1.5, vis: 0.9 }; }),
+      wl: with_world ? P.map(X => { const d = G.m3_v(cam.R, G.v_sub(X, P[9])); return { x: d[0] + gauss() * 0.004, y: d[1] + gauss() * 0.004, z: d[2] + gauss() * 0.006 }; }) : null,
+    });
+    const body = { points: Object.assign(new Array(33).fill(null), { 15: G.v_add(wrist, [gauss() * 0.01, gauss() * 0.01, gauss() * 0.01]) }) };
+    // both cameras see the left hand; only camera 2 (with world shape) sees the right hand
+    const r = HF.fuse([{ L: view(cams[0], false) }, { L: view(cams[1], true), R: view(cams[1], true) }],
+      { points: Object.assign(body.points.slice(), { 16: body.points[15] }) });
+    if (!r.L || r.L.source != 'tri') { ok = false; continue; }
+    r.L.points.forEach((X, j) => errs_tri.push(G.v_len(G.v_sub(X, P[j]))));
+    if (!r.R || r.R.source != 'mono') { ok = false; continue; }
+    // mono: shape relative to the wrist should match
+    r.R.points.forEach((X, j) => errs_mono.push(G.v_len(G.v_sub(G.v_sub(X, r.R.points[0]), G.v_sub(P[j], P[0])))));
+  }
+  const med = (a) => { const t = a.slice().sort((x, y) => x - y); return t[t.length >> 1]; };
+  const check = (label, val, lim) => { const pass = val <= lim; ok = ok && pass; console.log(`  ${pass ? 'PASS' : 'FAIL'} ${label}: ${(val * 100).toFixed(2)} cm (limit ${lim * 100} cm)`); };
+  check('triangulated hand point error (median)', errs_tri.length ? med(errs_tri) : 1, 0.01);
+  check('one-camera hand shape error (median)', errs_mono.length ? med(errs_mono) : 1, 0.012);
+  console.log('  ' + (ok ? 'ALL PASS' : 'SOME FAILED'));
+  return ok;
+}
+all = hand_test() && all;
+
 console.log('\n' + (all ? 'SELFTEST OK' : 'SELFTEST FAILED'));
 process.exit(all ? 0 : 1);

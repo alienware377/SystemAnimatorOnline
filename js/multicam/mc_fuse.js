@@ -136,7 +136,99 @@ function to_view(landmarks, world_landmarks, cam) {
   };
 }
 
-const API = { create, to_view };
+// ---------- hands ----------
+//
+// hand view (per camera, per side 'L'/'R' = the person's own left/right):
+//   { lm: [{ u, v, vis } x21] centered pixels, wl: [{ x, y, z } x21] | null (MediaPipe hand world landmarks, metres) }
+// Points seen by 2+ cameras are triangulated. A hand seen well by only one camera
+// uses that camera's hand world landmarks, rotated into the room and attached to
+// the 3D wrist (from the body, or from the triangulated hand points).
+
+const BODY_WRIST = { L: 15, R: 16 };
+
+function create_hands(calibration, options = {}) {
+  const cams = calibration.cameras.map(c => ({ R: c.R, t: c.t, f: c.f, width: c.width, height: c.height, solved: c.solved }));
+  const min_vis = options.min_vis ?? 0.3;
+  const min_tri = options.min_tri ?? 10;   // triangulated points needed to call a hand "3D"
+
+  const gate_px = (cam) => Math.max(12, 0.015 * cam.width);
+
+  function tri_point(views, j) {
+    let vs = views.map(v => ({ cam: cams[v.ci], u: v.h.lm[j].u, v: v.h.lm[j].v, w: v.h.lm[j].vis }));
+    while (vs.length >= 2) {
+      const X = G.triangulate(vs);
+      if (!X) return null;
+      let worst = -1, worst_e = 0, bad = false;
+      vs.forEach((vw, k) => {
+        const p = G.project(vw.cam, X);
+        const e = (p[2] <= 0) ? Infinity : Math.hypot(p[0] - vw.u, p[1] - vw.v) / gate_px(vw.cam);
+        if (e > 1) bad = true;
+        if (e > worst_e) { worst_e = e; worst = k; }
+      });
+      if (!bad) return X;
+      if (vs.length == 2) return null;
+      vs.splice(worst, 1);
+    }
+    return null;
+  }
+
+  // one camera's hand shape in room axes, relative to its own wrist (point 0)
+  function mono_shape(v) {
+    const R = cams[v.ci].R, wl = v.h.wl;
+    const Rt = G.m3_T(R);
+    const o = [wl[0].x, wl[0].y, wl[0].z];
+    return wl.map(p => G.m3_v(Rt, G.v_sub([p.x, p.y, p.z], o)));
+  }
+
+  function fuse_side(views, side, body) {
+    if (!views.length) return null;
+    const points = new Array(21).fill(null);
+    let n_tri = 0;
+    if (views.length >= 2) {
+      for (let j = 0; j < 21; j++) {
+        const X = tri_point(views, j);
+        if (X) { points[j] = X; n_tri++; }
+      }
+    }
+    // best single view with a 3D shape, for gaps or a hand only one camera sees well
+    const mono = views.filter(v => v.h.wl).sort((a, b) => b.score - a.score)[0];
+    if (n_tri >= min_tri) {
+      if (n_tri < 21 && mono) {
+        const shape = mono_shape(mono);
+        let off = [0, 0, 0], n = 0;
+        points.forEach((X, j) => { if (X) { off = G.v_add(off, G.v_sub(X, shape[j])); n++; } });
+        off = G.v_scale(off, 1 / n);
+        points.forEach((X, j) => { if (!X) points[j] = G.v_add(shape[j], off); });
+      }
+      else if (n_tri < 21) return null;
+      return { points, source: 'tri', n_tri, n_views: views.length };
+    }
+    if (!mono) return null;
+    const wrist = body?.points?.[BODY_WRIST[side]];
+    if (!wrist) return null;
+    const shape = mono_shape(mono);
+    return { points: shape.map(p => G.v_add(p, wrist)), source: 'mono', n_tri: 0, n_views: 1 };
+  }
+
+  // hand_views[ci] = { L, R } (either may be missing), body = MC_fuse result for the same frame
+  function fuse(hand_views, body) {
+    const out = {};
+    for (const side of ['L', 'R']) {
+      const views = [];
+      hand_views.forEach((hv, ci) => {
+        const h = hv?.[side];
+        if (!h || !cams[ci]?.solved || !(h.score >= min_vis)) return;
+        views.push({ ci, h, score: h.score });
+      });
+      out[side] = fuse_side(views, side, body);
+    }
+    return out;
+  }
+
+  return { fuse, cams };
+}
+
+const API = { create, create_hands, to_view };
 
 // Electron pages with nodeIntegration have `module` too, so always set the global as well
 if (typeof module === 'object' && module.exports) module.exports = API;

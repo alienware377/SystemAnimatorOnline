@@ -5,7 +5,7 @@
 > This is a fork of [XR Animator](https://github.com/ButzYung/SystemAnimatorOnline) v0.35.0 that adds **true 3D body tracking with 2 or more webcams**, plus live views and full face blendshape control. Everything else is the original XR Animator by ButzYung.
 >
 > **What it adds**
-> - **Multi-camera 3D:** every extra webcam runs its own body tracker. After a 30 second walk-around calibration (no checkerboard), joints seen by 2+ cameras are triangulated in real 3D, so depth, turning sideways and hidden arms are much steadier. XR Animator's own camera stays camera 1 for face and hands.
+> - **Multi-camera 3D:** every extra webcam runs its own body and hand tracker. After a 30 second walk-around calibration (no checkerboard), joints and finger points seen by 2+ cameras are triangulated in real 3D, so depth, turning sideways, edge-on hands and hidden arms are much steadier. XR Animator's own camera stays camera 1 (and the only one for face tracking).
 > - **Rough room layout:** drag the cameras roughly into place on a top-down sketch. It gives calibration a head start, or works as a quick rough calibration on its own.
 > - **Live view:** each camera with its tracked skeleton and the 3D result drawn back on top, an orbitable 3D room view, and the layout editor.
 > - **Face blendshapes:** live ARKit values, and mapping onto any blendshape names (ARKit / Perfect Sync, VRM 0 and VRM 1 presets, MMD morphs, the avatar's own, or custom). Matching is automatic, with manual overrides and per-blendshape strength, input range, curve and smoothing, like VNyan. Results go out over VMC and onto XR Animator's avatar.

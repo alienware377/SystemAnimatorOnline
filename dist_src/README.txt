@@ -1,11 +1,12 @@
 XR Animator Multi-Camera 3D
 ===========================
 
-Adds true 3D body tracking to XR Animator by using 2 or more webcams at once.
-XR Animator's own camera stays "camera 1" (face, hands and body). Every extra
-camera tracks the body too, and after a one-time calibration the joints are
-measured in real 3D, so depth, turning sideways and arms hidden behind your
-body are much steadier than with one camera.
+Adds true 3D body and hand tracking to XR Animator by using 2 or more webcams
+at once. XR Animator's own camera stays "camera 1" (face, hands and body).
+Every extra camera tracks the body and hands too, and after a one-time
+calibration the joints and fingers are measured in real 3D, so depth, turning
+sideways, hands turned edge-on and arms hidden behind your body are much
+steadier than with one camera.
 
 Made for XR Animator v0.35.0 (Windows desktop version).
 
@@ -130,7 +131,12 @@ Then use 192.168.50.1 as the VMC host in XR Animator.
 
 GOOD TO KNOW
 ------------
-- Face and hand tracking still come from camera 1 only.
+- Hands: each extra camera zooms in on both wrists and tracks the hands.
+  A hand seen by 2+ cameras is measured in 3D; a hand only one extra camera
+  sees still gets its shape from that camera. Untick "Use the extra
+  cameras for hands too" in the 3D panel to go back to camera 1 only.
+  XR Animator's own hand tracking still needs to be on.
+- Face tracking still comes from camera 1 only.
 - Blendshape names with Japanese (or other non-English) letters now
   arrive correctly in VNyan. XR Animator's VMC sender used to garble them.
 - Avatar position (walking around) still uses XR Animator's own method, but

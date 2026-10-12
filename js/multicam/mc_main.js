@@ -35,6 +35,7 @@ const settings = Object.assign({
   model_quality: '',
   width: 1280, height: 720,
   show_button: true,
+  hands: true,            // track hands on the extra cameras too, and fuse them in 3D
   layout: [],             // rough camera layout from the Layout tab: [{ x, z, h, fov }] in metres / degrees
   layout_hint: true,      // give that layout to Calibrate as a starting guess
 }, load_settings());
@@ -55,7 +56,8 @@ let fuser = null;
 let recording = null;      // { samples, until, cams_info }
 let calibrating = false;
 // latest frame, for the live views
-const live = { cam0_kp: null, cam0_flip: false, fused: null, t: 0 };
+const live = { cam0_kp: null, cam0_flip: false, fused: null, hands: null, cam0_hands: null, t: 0 };
+let hand_fuser = null;
 const stats = { cam0_fps: 0, cam0_n: 0, cam0_t: 0, tri: 0, mono: 0, active: false, last_error: '' };
 
 function camera() { return window.System?._browser?.camera; }
@@ -113,11 +115,12 @@ function use_layout_as_calibration() {
 function set_calibration(cal) {
   settings.calibration = cal;
   fuser = cal ? FUSE.create(cal) : null;
+  hand_fuser = cal ? FUSE.create_hands(cal) : null;
   save_settings();
   ui_refresh();
 }
 if (settings.calibration) {
-  try { fuser = FUSE.create(settings.calibration); }
+  try { fuser = FUSE.create(settings.calibration); hand_fuser = FUSE.create_hands(settings.calibration); }
   catch (e) { settings.calibration = null; }
 }
 
@@ -152,7 +155,7 @@ async function open_extra(deviceId) {
 
   cam.worker = new Worker('js/multicam/mc_pose_worker.js');
   cam.worker.onmessage = (e) => on_worker_message(cam, e.data);
-  cam.worker.postMessage({ type: 'init', param: { model_quality: settings.model_quality } });
+  cam.worker.postMessage({ type: 'init', param: { model_quality: settings.model_quality, hands: true } });
 
   const pump = () => {
     if (cam.closed) return;
@@ -170,7 +173,7 @@ async function grab_frame(cam) {
   const ts = performance.now();
   try {
     const bitmap = await createImageBitmap(cam.video);
-    cam.worker.postMessage({ type: 'frame', bitmap, ts, id: ++cam.frame_id }, [bitmap]);
+    cam.worker.postMessage({ type: 'frame', bitmap, ts, id: ++cam.frame_id, hands: !!settings.hands }, [bitmap]);
   }
   catch (err) {
     cam.busy = false;
@@ -183,7 +186,7 @@ function on_worker_message(cam, d) {
   if (d.type != 'result') return;
   cam.busy = false;
   cam.w = d.w; cam.h = d.h;
-  cam.history.push({ ts: d.ts, landmarks: d.landmarks, worldLandmarks: d.worldLandmarks });
+  cam.history.push({ ts: d.ts, landmarks: d.landmarks, worldLandmarks: d.worldLandmarks, hands: d.hands || null });
   if (cam.history.length > 12) cam.history.shift();
   cam.n++;
   const now = performance.now();
@@ -214,7 +217,9 @@ function view_at(cam, t) {
   if (a && b && a !== b && b.ts - a.ts < 2 * max_gap) {
     const k = (t - a.ts) / (b.ts - a.ts);
     const lerp = (p, q) => p + (q - p) * k;
+    const near = (t - a.ts < b.ts - t) ? a : b;
     return {
+      hands: near.hands,
       landmarks: a.landmarks.map((l, i) => ({
         x: lerp(l.x, b.landmarks[i].x), y: lerp(l.y, b.landmarks[i].y),
         visibility: Math.min(l.visibility, b.landmarks[i].visibility),
@@ -225,7 +230,7 @@ function view_at(cam, t) {
     };
   }
   const n = [a, b].filter(Boolean).sort((p, q) => Math.abs(p.ts - t) - Math.abs(q.ts - t))[0];
-  if (n && Math.abs(n.ts - t) < max_gap) return { landmarks: n.landmarks, worldLandmarks: n.worldLandmarks };
+  if (n && Math.abs(n.ts - t) < max_gap) return { landmarks: n.landmarks, worldLandmarks: n.worldLandmarks, hands: n.hands };
   return null;
 }
 
@@ -272,6 +277,10 @@ function _process(result) {
   live.cam0_kp = (kp && kp.length == 33) ? kp.map(k => ({ x: k.position.x, y: k.position.y, score: k.score })) : null;
   live.cam0_flip = !!camera()?.video_flipped;
   live.fused = null;
+  // camera 1's own hands: for the live view, and to learn what its Left/Right labels mean
+  const hp = Array.isArray(result.handpose) ? result.handpose : null;
+  live.cam0_hands = hp && hp.map(h => ({ label: h.label, kp: h.keypoints?.map(k => [k[0], k[1]]) }));
+  if (hp) learn_labels(hp, live.cam0_flip);
   live.t = now;
   if (!extra.length) { stats.active = false; return result; }
   // capture time of camera 1's frame: now minus the time XR Animator's worker spent on it
@@ -304,8 +313,143 @@ function _process(result) {
   stats.active = true;
   live.fused = fused;
 
-  result.posenet = build_posenet(fused, result.posenet, cal.cameras[0]);
+  const vcam = virtual_cam(cal.cameras[0]);
+  if (settings.hands && hand_fuser && (result.handpose == null || Array.isArray(result.handpose))) {
+    const hand_views = [cam0_hand_views(result.handpose, cal.cameras[0])]
+      .concat(views_norm.slice(1).map((v, i) => extra_hand_views(v?.hands, cal.cameras[i + 1])));
+    const hands = hand_fuser.fuse(hand_views, fused);
+    live.hands = hands;
+    stats.hands = ['L', 'R'].map(s => hands[s] ? hands[s].source : '-').join('/');
+    const hp = build_handpose(hands, result.handpose, cal.cameras[0], vcam);
+    if (hp) result.handpose = hp;
+  }
+  else live.hands = null;
+
+  result.posenet = build_posenet(fused, result.posenet, cal.cameras[0], vcam);
   return result;
+}
+
+// ---------- hands ----------
+// XR Animator pairs a hand with an arm by its "Left"/"Right" label. Which real hand
+// that label means depends on mirroring, so it's learned live: every hand XR Animator
+// reports is matched to the nearest wrist in its own picture (seen so far: in the
+// usual mirrored view, "Left" is the person's real left hand).
+
+const FINGERS = { palm: [0], thumb: [1, 2, 3, 4], index: [5, 6, 7, 8], middle: [9, 10, 11, 12], ring: [13, 14, 15, 16], pinky: [17, 18, 19, 20] };
+function annotate(kp) {
+  const a = {};
+  for (const k in FINGERS) a[k] = FINGERS[k].map(i => kp[i]);
+  return a;
+}
+const label_votes = { Left: { L: 0, R: 0 }, Right: { L: 0, R: 0 } };
+function learn_labels(handpose, flip) {
+  const kp = live.cam0_kp;
+  if (!kp) return;
+  for (const h of handpose) {
+    const v = label_votes[h.label], k0 = h.keypoints?.[0];
+    if (!v || !k0 || !kp[15] || !kp[16]) continue;
+    const d15 = Math.hypot(k0[0] - kp[15].x, k0[1] - kp[15].y), d16 = Math.hypot(k0[0] - kp[16].x, k0[1] - kp[16].y);
+    if (Math.min(d15, d16) > 0.6 * Math.max(d15, d16)) continue;   // too close to call
+    const slot = d15 < d16 ? 15 : 16;
+    const real = flip ? MIRROR[slot] : slot;                        // the person's own wrist
+    const side = real == 15 ? 'L' : 'R';
+    v[side] = Math.min(v[side] + 1, 50);
+    v[side == 'L' ? 'R' : 'L'] = Math.max(v[side == 'L' ? 'R' : 'L'] - 1, 0);
+  }
+}
+function label_side(label) {
+  const v = label_votes[label];
+  if (v && v.L != v.R) return v.L > v.R ? 'L' : 'R';
+  return label == 'Left' ? 'L' : 'R';
+}
+function side_label(side) {
+  return (label_side('Left') == side) ? 'Left' : 'Right';
+}
+
+function cam0_hand_views(handpose, cal0) {
+  const out = {};
+  const C = camera();
+  const W = C?.video_canvas?.width, H = C?.video_canvas?.height;
+  if (!Array.isArray(handpose) || !W) return out;
+  const flip = !!C.video_flipped;
+  for (const h of handpose) {
+    if (!h?.keypoints || h.keypoints.length != 21) continue;
+    const side = label_side(h.label);
+    const wk = h.worldLandmarks?.keypoints;
+    out[side] = {
+      score: h.score ?? 0.8,
+      lm: h.keypoints.map(k => {
+        const x = flip ? 1 - k[0] / W : k[0] / W;
+        return { u: (x - 0.5) * cal0.width, v: (k[1] / H - 0.5) * cal0.height, vis: h.score ?? 0.8 };
+      }),
+      wl: (wk && wk.length == 21 && Array.isArray(wk[0])) ? wk.map(p => ({ x: flip ? -p[0] : p[0], y: p[1], z: p[2] })) : null,
+    };
+  }
+  return out;
+}
+
+function extra_hand_views(hands, cam) {
+  const out = {};
+  if (!hands) return out;
+  for (const h of hands) {
+    out[h.side] = {
+      score: h.score,
+      lm: h.landmarks.map(l => ({ u: (l.x - 0.5) * cam.width, v: (l.y - 0.5) * cam.height, vis: h.score })),
+      wl: h.world,
+    };
+  }
+  return out;
+}
+
+// fused hands -> XR Animator's handpose list (2D keypoints in camera 1's picture + true 3D shape)
+function build_handpose(hands, original, cal0, vcam) {
+  const C = camera();
+  const W = C.video_canvas.width;
+  const flip = !!C.video_flipped;
+  const sx = W / cal0.width;
+  const orig = Array.isArray(original) ? original : [];
+  const out = [];
+  for (const side of ['L', 'R']) {
+    const label = side_label(side);
+    const fh = hands[side];
+    const o = orig.find(h => h.label == label);
+    if (!fh) { if (o) out.push(o); continue; }
+    const wrist_c = G.cam_to_local(vcam, fh.points[0]);
+    const keypoints = fh.points.map(X => {
+      const pc = G.cam_to_local(vcam, X);
+      let x = (cal0.f * pc[0] / pc[2] + cal0.width / 2) * sx;
+      const y = (cal0.f * pc[1] / pc[2] + cal0.height / 2) * sx;
+      if (flip) x = W - x;
+      return [x, y, cal0.f * (pc[2] - wrist_c[2]) / wrist_c[2] * sx];
+    });
+    const world = fh.points.map(X => {
+      const r = G.m3_v(vcam.R, G.v_sub(X, fh.points[0]));
+      return [flip ? -r[0] : r[0], r[1], r[2]];
+    });
+    out.push({
+      score: fh.source == 'tri' ? 0.95 : 0.8,
+      label,
+      keypoints,
+      annotations: annotate(keypoints),
+      worldLandmarks: { keypoints: world, annotations: annotate(world) },
+      _multicam: fh.source,
+    });
+  }
+  return out.length ? out : null;
+}
+
+// camera 1's position and heading; levelled if "Keep the avatar level" is on
+function virtual_cam(cal0) {
+  let R = cal0.R;
+  const center = cal0.center || G.camera_center(cal0);
+  if (settings.level) {
+    let z = [R[6], 0, R[8]];
+    z = G.v_norm((G.v_len(z) > 1e-6) ? z : [0, 0, -1]);
+    const x = G.v_norm(G.v_cross(z, [0, 1, 0]));
+    const y = G.v_cross(z, x);
+    R = [...x, ...y, ...z];
+  }
+  return { R, t: G.v_scale(G.m3_v(R, center), -1), f: cal0.f };
 }
 
 function to_px(v, cam) {
@@ -319,23 +463,13 @@ function to_px(v, cam) {
 // result: 2D keypoints in camera 1's (possibly mirrored) image, and hip-centred
 // metric 3D keypoints in camera axes. With "level" on, the virtual camera keeps
 // camera 1's position and heading but is levelled, so a tilted tablet doesn't tilt the avatar.
-function build_posenet(fused, original, cal0) {
+function build_posenet(fused, original, cal0, vcam) {
   const C = camera();
   const W = C.video_canvas.width, H = C.video_canvas.height;
   const flip = !!C.video_flipped;
   const sx = W / cal0.width;
-
-  let R = cal0.R;
-  const center = cal0.center || G.camera_center(cal0);
-  if (settings.level) {
-    let z = [R[6], 0, R[8]];
-    z = G.v_norm((G.v_len(z) > 1e-6) ? z : [0, 0, -1]);
-    const x = G.v_norm(G.v_cross(z, [0, 1, 0]));
-    const y = G.v_cross(z, x);
-    R = [...x, ...y, ...z];
-  }
-  const t = G.v_scale(G.m3_v(R, center), -1);
-  const vcam = { R, t, f: cal0.f };
+  vcam = vcam || virtual_cam(cal0);
+  const R = vcam.R;
 
   const hip_c = G.cam_to_local(vcam, fused.hip);
   const orig_kp = original?.keypoints?.length == 33 ? original.keypoints : null;
@@ -524,6 +658,8 @@ function build_ui() {
       onchange: (e) => { settings.enabled = e.target.checked; fuser?.reset(); save_settings(); } }), ' Use multi-camera 3D']),
     el('label', {}, [el('input', { type: 'checkbox', checked: settings.level,
       onchange: (e) => { settings.level = e.target.checked; save_settings(); } }), ' Keep the avatar level (ignore camera 1 tilt)']),
+    el('label', {}, [el('input', { type: 'checkbox', checked: settings.hands,
+      onchange: (e) => { settings.hands = e.target.checked; save_settings(); } }), ' Use the extra cameras for hands too']),
     el('label', {}, [el('input', { type: 'checkbox', checked: settings.show_button,
       onchange: (e) => { settings.show_button = e.target.checked; save_settings(); if (button) button.style.display = settings.show_button ? '' : 'none'; } }), ' Show the "3D" button (Ctrl+Shift+M always works)']),
     log_el,
@@ -582,6 +718,7 @@ function _ui_status() {
     if (cal.cameras.length != extra.length + 1) lines.push(`Needs ${cal.cameras.length - 1} extra camera(s) open, you have ${extra.length}.`);
     if (cal.cameras[0].label && cam0_label() && cal.cameras[0].label != cam0_label()) lines.push('Warning: camera 1 is a different camera than when calibrated.');
     lines.push(stats.active ? `3D active: ${stats.tri} joints triangulated, ${stats.mono} from one camera.` : '3D not active right now.');
+    if (stats.active && settings.hands && live.hands) lines.push(`Hands (left/right): ${['L', 'R'].map(s => live.hands[s] ? (live.hands[s].source == 'tri' ? '3D' : 'one camera') : 'not seen').join(' / ')}.`);
   }
   if (stats.last_error) lines.push('Last error: ' + stats.last_error);
   status_el.textContent = '';
@@ -657,7 +794,7 @@ window.MC_multicam = {
   get extra() { return extra; },
   get stats() { return stats; },
   toggle_panel,
-  _cam0_view: cam0_view,
+  _cam0_view: cam0_view, _label_votes: label_votes,
   live, MIRROR, BLAZEPOSE, camera,
   layout_entry, layout_cams, use_layout_as_calibration, save_settings, ui_log,
   get calibration() { return settings.calibration; },

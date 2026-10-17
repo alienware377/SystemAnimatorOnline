@@ -698,7 +698,9 @@ function build_face() {
     if (!face) { status.textContent = 'Face module not loaded.'; return; }
     if (dirty) { dirty = false; rebuild(); }
     const n = face.settings.targets.length, unmatched = face.settings.targets.filter(t => !t.source).length;
-    status.textContent = (face.face_alive ? `Face tracking: ${face.arkit_fps.toFixed(0)} fps.` : 'Face tracking is not running (use a face mode in XR Animator).') +
+    const mi = face.mix_info;
+    const from = (mi && mi.length > 1) ? ' From ' + mi.map((x, i) => x > 0.005 ? `camera ${i + 1} ${Math.round(x * 100)}%` : null).filter(Boolean).join(', ') + '.' : '';
+    status.textContent = (face.face_alive ? `Face tracking: ${face.arkit_fps.toFixed(0)} fps.${from}` : 'Face tracking is not running (use a face mode in XR Animator).') +
       ` ${n} blendshape${n == 1 ? '' : 's'} listed` + (unmatched ? `, ${unmatched} without a match.` : '.') + ' * = needs the tongue tracking below.';
     const set = (b, x, raw) => {
       const v = Math.max(0, Math.min(1, x || 0));

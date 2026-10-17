@@ -36,6 +36,7 @@ const settings = Object.assign({
   width: 1280, height: 720,
   show_button: true,
   hands: true,            // track hands on the extra cameras too, and fuse them in 3D
+  face: true,             // read the face on the extra cameras too, and mix it by which camera the face points at
   layout: [],             // rough camera layout from the Layout tab: [{ x, z, h, fov }] in metres / degrees
   layout_hint: true,      // give that layout to Calibrate as a starting guess
 }, load_settings());
@@ -56,7 +57,7 @@ let fuser = null;
 let recording = null;      // { samples, until, cams_info }
 let calibrating = false;
 // latest frame, for the live views
-const live = { cam0_kp: null, cam0_flip: false, fused: null, hands: null, cam0_hands: null, t: 0 };
+const live = { cam0_kp: null, cam0_flip: false, fused: null, hands: null, cam0_hands: null, face: null, t: 0 };
 let hand_fuser = null;
 const stats = { cam0_fps: 0, cam0_n: 0, cam0_t: 0, tri: 0, mono: 0, active: false, last_error: '' };
 
@@ -155,7 +156,7 @@ async function open_extra(deviceId) {
 
   cam.worker = new Worker('js/multicam/mc_pose_worker.js');
   cam.worker.onmessage = (e) => on_worker_message(cam, e.data);
-  cam.worker.postMessage({ type: 'init', param: { model_quality: settings.model_quality, hands: true } });
+  cam.worker.postMessage({ type: 'init', param: { model_quality: settings.model_quality, hands: true, face: true } });
 
   const pump = () => {
     if (cam.closed) return;
@@ -173,7 +174,7 @@ async function grab_frame(cam) {
   const ts = performance.now();
   try {
     const bitmap = await createImageBitmap(cam.video);
-    cam.worker.postMessage({ type: 'frame', bitmap, ts, id: ++cam.frame_id, hands: !!settings.hands }, [bitmap]);
+    cam.worker.postMessage({ type: 'frame', bitmap, ts, id: ++cam.frame_id, hands: !!settings.hands, face: !!settings.face }, [bitmap]);
   }
   catch (err) {
     cam.busy = false;
@@ -186,7 +187,7 @@ function on_worker_message(cam, d) {
   if (d.type != 'result') return;
   cam.busy = false;
   cam.w = d.w; cam.h = d.h;
-  cam.history.push({ ts: d.ts, landmarks: d.landmarks, worldLandmarks: d.worldLandmarks, hands: d.hands || null });
+  cam.history.push({ ts: d.ts, landmarks: d.landmarks, worldLandmarks: d.worldLandmarks, hands: d.hands || null, face: d.face || null });
   if (cam.history.length > 12) cam.history.shift();
   cam.n++;
   const now = performance.now();
@@ -220,6 +221,7 @@ function view_at(cam, t) {
     const near = (t - a.ts < b.ts - t) ? a : b;
     return {
       hands: near.hands,
+      face: near.face,
       landmarks: a.landmarks.map((l, i) => ({
         x: lerp(l.x, b.landmarks[i].x), y: lerp(l.y, b.landmarks[i].y),
         visibility: Math.min(l.visibility, b.landmarks[i].visibility),
@@ -230,7 +232,7 @@ function view_at(cam, t) {
     };
   }
   const n = [a, b].filter(Boolean).sort((p, q) => Math.abs(p.ts - t) - Math.abs(q.ts - t))[0];
-  if (n && Math.abs(n.ts - t) < max_gap) return { landmarks: n.landmarks, worldLandmarks: n.worldLandmarks, hands: n.hands };
+  if (n && Math.abs(n.ts - t) < max_gap) return { landmarks: n.landmarks, worldLandmarks: n.worldLandmarks, hands: n.hands, face: n.face };
   return null;
 }
 
@@ -313,6 +315,8 @@ function _process(result) {
   stats.active = true;
   live.fused = fused;
 
+  update_face_mix(fused, views_norm, cal, now);
+
   const vcam = virtual_cam(cal.cameras[0]);
   if (settings.hands && hand_fuser && (result.handpose == null || Array.isArray(result.handpose))) {
     const hand_views = [cam0_hand_views(result.handpose, cal.cameras[0])]
@@ -327,6 +331,35 @@ function _process(result) {
 
   result.posenet = build_posenet(fused, result.posenet, cal.cameras[0], vcam);
   return result;
+}
+
+// ---------- face ----------
+// Every camera that sees the face gets a weight from how directly the face points
+// at it (from the 3D nose and ears): straight on counts most, beyond about 70
+// degrees off it doesn't count. mc_face.js mixes the ARKit values with these.
+
+function update_face_mix(fused, views_norm, cal, now) {
+  live.face = null;
+  if (!settings.face) return;
+  const P = fused.points;
+  if (!P[0] || !P[7] || !P[8]) return;
+  const fwd = G.v_norm(G.v_sub(P[0], G.v_scale(G.v_add(P[7], P[8]), 0.5)));
+  const weights = cal.cameras.map((c, i) => {
+    if (!c.solved) return 0;
+    if (i > 0 && !views_norm[i]?.face) return 0;
+    const d = G.v_norm(G.v_sub(c.center || G.camera_center(c), P[0]));
+    const f = G.v_dot(fwd, d);
+    return f > 0.35 ? Math.pow((f - 0.35) / 0.65, 2) : 0;
+  });
+  live.face = { weights, faces: views_norm.map((v, i) => i ? (v?.face || null) : null), t: now };
+  // camera 1 can't see the face at all: keep the face going from the other cameras
+  const F = window.MC_face;
+  if (F && !F.xra_face_alive && weights.some((w, i) => i && w > 0)) F.feed_extra();
+}
+
+function face_mix() {
+  if (!live.face || performance.now() - live.face.t > 300) return null;
+  return live.face;
 }
 
 // ---------- hands ----------
@@ -660,6 +693,8 @@ function build_ui() {
       onchange: (e) => { settings.level = e.target.checked; save_settings(); } }), ' Keep the avatar level (ignore camera 1 tilt)']),
     el('label', {}, [el('input', { type: 'checkbox', checked: settings.hands,
       onchange: (e) => { settings.hands = e.target.checked; save_settings(); } }), ' Use the extra cameras for hands too']),
+    el('label', {}, [el('input', { type: 'checkbox', checked: settings.face,
+      onchange: (e) => { settings.face = e.target.checked; save_settings(); } }), ' Use the extra cameras for the face too']),
     el('label', {}, [el('input', { type: 'checkbox', checked: settings.show_button,
       onchange: (e) => { settings.show_button = e.target.checked; save_settings(); if (button) button.style.display = settings.show_button ? '' : 'none'; } }), ' Show the "3D" button (Ctrl+Shift+M always works)']),
     log_el,
@@ -794,7 +829,7 @@ window.MC_multicam = {
   get extra() { return extra; },
   get stats() { return stats; },
   toggle_panel,
-  _cam0_view: cam0_view, _label_votes: label_votes,
+  _cam0_view: cam0_view, _label_votes: label_votes, face_mix,
   live, MIRROR, BLAZEPOSE, camera,
   layout_entry, layout_cams, use_layout_as_calibration, save_settings, ui_log,
   get calibration() { return settings.calibration; },

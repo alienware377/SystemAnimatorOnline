@@ -156,13 +156,56 @@ function save() {
 const arkit = {};         // latest ARKit values (lowerCamel names)
 ARKIT.forEach(n => { arkit[n] = 0; });
 let arkit_t = 0, arkit_fps = 0, arkit_n = 0, arkit_fps_t = 0;
+let xra_t = 0;            // last time XR Animator's own face tracker (camera 1) reported
+let mix_info = null;      // which cameras the face values came from, for the live view
 let xra_weights = {};     // XR Animator's own values this frame
 let local_names = [];     // expressions on XR Animator's avatar
 const out = {};           // final values by target name
 const smooth_state = {};
 
+// Mix in the other cameras' face values (see mc_main.js face_mix). Works on the raw
+// MediaPipe names, before the left/right swap, and writes back into the list, so
+// XR Animator's own face code uses the mixed values too.
+function blend_cameras(categories, with_cam0) {
+  const mix = window.MC_multicam?.face_mix?.();
+  if (!mix) { mix_info = null; return; }
+  const eye_off = window.System?._browser?.camera?.facemesh?.eye_tracking === false;
+  const w = mix.weights.map((x, i) => (i == 0 ? (with_cam0 ? x : 0) : (mix.faces[i] ? x : 0)));
+  const total = w.reduce((a, b) => a + b, 0);
+  if (!(total > 0) || (with_cam0 && total == w[0])) { mix_info = with_cam0 ? [1] : null; return; }
+  mix_info = w.map(x => x / total);
+  for (const c of categories) {
+    const n = c.categoryName;
+    if (eye_off && n.indexOf('eye') != -1) continue;
+    let sw = w[0], sv = w[0] * (c.score || 0);
+    for (let i = 1; i < w.length; i++) {
+      const v = mix.faces[i]?.values?.[n];
+      if (w[i] > 0 && v != null) { sw += w[i]; sv += w[i] * v; }
+    }
+    if (sw > 0) c.score = sv / sw;
+  }
+}
+
+// camera 1 lost the face: build the values from the other cameras alone
+function feed_extra() {
+  const cats = ARKIT.filter(n => !UNTRACKED.has(n)).map(n => ({ categoryName: n, score: 0 }));
+  blend_cameras(cats, false);
+  if (!mix_info) return;
+  store_arkit(cats);
+}
+
 // XR Animator's face result: [{ categoryName, score }] (already calibrated by XR Animator)
 function on_arkit(categories) {
+  try {
+    xra_t = performance.now();
+    if (window.MC_multicam?.settings?.face) blend_cameras(categories, true);
+    else mix_info = null;
+    store_arkit(categories);
+  }
+  catch (e) {}
+}
+
+function store_arkit(categories) {
   try {
     for (const c of categories) {
       let n = c.categoryName;
@@ -305,7 +348,9 @@ function all_sources() {
 }
 
 window.MC_face = {
-  on_arkit, local_weights, vmc_morphs,
+  on_arkit, local_weights, vmc_morphs, feed_extra,
+  get xra_face_alive() { return performance.now() - xra_t < 300; },
+  get mix_info() { return mix_info; },
   settings, save, ARKIT, PACKS, DERIVED_LABEL, UNTRACKED, is_untracked,
   arkit, out, source_value, source_label, auto_source,
   add_targets, add_pack, auto_match_all, remove_target, all_sources, default_target,

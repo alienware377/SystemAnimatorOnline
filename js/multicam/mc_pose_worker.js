@@ -4,8 +4,13 @@
 // With hands on, it also crops around each wrist the body tracker found and runs
 // HandLandmarker on the close-up (like XR Animator does), so each hand already
 // knows which side it is.
+// With face on, it crops around the head and runs FaceLandmarker for the ARKit
+// face values. The crop is MIRRORED first, so the values come out exactly like
+// XR Animator's own (it tracks a mirrored picture), and can be mixed with them.
 
-let landmarker = null, hand_landmarker = null;
+let landmarker = null, hand_landmarker = null, face_landmarker = null;
+let face_canvas = null, face_ctx = null;
+const FACE_CROP = 256;
 let last_ts = 0;
 let busy = false;
 
@@ -43,7 +48,16 @@ async function init(param) {
     }
     catch (err) { postMessage({ type: 'error', message: 'hand tracker: ' + (err && err.message || err) }); }
   }
-  postMessage({ type: 'ready', hands: !!hand_landmarker });
+  if (param.face) {
+    try {
+      face_landmarker = await m.FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: '../@mediapipe/tasks/face_landmarker.task', delegate },
+        runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true,
+      });
+    }
+    catch (err) { postMessage({ type: 'error', message: 'face tracker: ' + (err && err.message || err) }); }
+  }
+  postMessage({ type: 'ready', hands: !!hand_landmarker, face: !!face_landmarker });
 }
 
 async function track_hands(bitmap, lm) {
@@ -81,6 +95,34 @@ async function track_hands(bitmap, lm) {
   return out;
 }
 
+// ARKit face values from a mirrored close-up of the head (null if no face)
+function track_face(bitmap, lm, ts) {
+  const w = bitmap.width, h = bitmap.height;
+  const pts = [0, 2, 5, 7, 8, 9, 10].map(i => lm[i]).filter(p => p && p.visibility > 0.3);
+  if (pts.length < 4) return null;
+  const xs = pts.map(p => p.x * w), ys = pts.map(p => p.y * h);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  const size = Math.round(Math.min(Math.max(2.6 * span, 96), Math.min(w, h)));
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2 + 0.1 * size;
+  const sx = Math.round(Math.max(0, Math.min(w - size, cx - size / 2))), sy = Math.round(Math.max(0, Math.min(h - size, cy - size / 2)));
+  if (!face_canvas) {
+    face_canvas = new OffscreenCanvas(FACE_CROP, FACE_CROP);
+    face_ctx = face_canvas.getContext('2d');
+  }
+  face_ctx.setTransform(-1, 0, 0, 1, FACE_CROP, 0);
+  face_ctx.drawImage(bitmap, sx, sy, size, size, 0, 0, FACE_CROP, FACE_CROP);
+  face_ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const img = face_canvas.transferToImageBitmap();
+  let r = null;
+  try { r = face_landmarker.detectForVideo(img, ts); } catch (e) {}
+  img.close();
+  const cats = r?.faceBlendshapes?.[0]?.categories;
+  if (!cats) return null;
+  const values = {};
+  for (const c of cats) values[c.categoryName] = c.score;
+  return { values };
+}
+
 onmessage = async (e) => {
   const d = e.data;
   if (d.type == 'init') {
@@ -106,7 +148,10 @@ onmessage = async (e) => {
 
     const lm = result?.landmarks?.[0];
     const wl = result?.worldLandmarks?.[0];
-    let hands = null;
+    let hands = null, face = null;
+    if (face_landmarker && d.face !== false && lm) {
+      try { face = track_face(bitmap, lm, ts); } catch (err) { face = null; }
+    }
     if (hand_landmarker && d.hands !== false && lm) {
       try { hands = await track_hands(bitmap, lm); } catch (err) { hands = null; }
     }
@@ -122,6 +167,7 @@ onmessage = async (e) => {
       landmarks: lm ? lm.map(l => ({ x: l.x, y: l.y, z: l.z, visibility: l.visibility })) : null,
       worldLandmarks: wl ? wl.map(l => ({ x: l.x, y: l.y, z: l.z })) : null,
       hands,
+      face,
     });
   }
 };

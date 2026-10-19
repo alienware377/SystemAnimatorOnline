@@ -37,6 +37,9 @@ const settings = Object.assign({
   show_button: true,
   hands: true,            // track hands on the extra cameras too, and fuse them in 3D
   face: true,             // read the face on the extra cameras too, and mix it by which camera the face points at
+  position_3d: true,      // avatar position (walking, crouching, jumping) from the real 3D distance
+  feet: true,             // keep feet on the floor and stop them sliding while they stand still
+  setup_prompt: 'ask',    // 'ask' = offer setup when another camera is found, 'never' = don't
   layout: [],             // rough camera layout from the Layout tab: [{ x, z, h, fov }] in metres / degrees
   layout_hint: true,      // give that layout to Calibrate as a starting guess
 }, load_settings());
@@ -313,7 +316,9 @@ function _process(result) {
   stats.tri = fused.source.filter(s => s == 'tri').length;
   stats.mono = fused.source.filter(s => s == 'mono').length;
   stats.active = true;
+  plant_feet(fused, now);
   live.fused = fused;
+  live.pos_ok = position_sample_ok(fused, v0, cal.cameras[0]);
 
   update_face_mix(fused, views_norm, cal, now);
 
@@ -331,6 +336,88 @@ function _process(result) {
 
   result.posenet = build_posenet(fused, result.posenet, cal.cameras[0], vcam);
   return result;
+}
+
+// ---------- avatar position ----------
+// XR Animator places the avatar along the ray through the hips in camera 1's picture
+// (already exact with the 3D data), at a distance it guesses from body size. Here the
+// distance comes from the real 3D hips instead. Its distance units depend on the
+// avatar, so the conversion is learned from moments it can judge well itself:
+// standing upright, facing camera 1, whole torso in view.
+
+const pos = { ratios: [], k: null, n: 0 };
+
+function position_sample_ok(fused, v0, cal0) {
+  const P = fused.points, S = fused.source;
+  if (![11, 12, 23, 24].every(j => P[j] && S[j] == 'tri')) return false;
+  if (!v0 || ![11, 12, 23, 24].every(j => v0.landmarks[j].visibility > 0.8)) return false;
+  const hip = fused.hip, sh = G.v_scale(G.v_add(P[11], P[12]), 0.5);
+  const spine = G.v_norm(G.v_sub(sh, hip));
+  if (spine[1] < 0.9) return false;                                   // upright
+  const to_cam = G.v_norm(G.v_sub(cal0.center || G.camera_center(cal0), hip));
+  const across = G.v_norm(G.v_sub(P[12], P[11]));
+  return Math.abs(G.v_dot(across, to_cam)) < 0.3;                     // facing camera 1
+}
+
+// called from XR Animator's hip code with its current hip vector C (camera-relative);
+// returns how much to scale C so its length matches the real distance
+function hip_depth_scale(C) {
+  try {
+    if (!settings.position_3d || !stats.active || !live.fused || performance.now() - live.t > 250) return null;
+    const cal = settings.calibration;
+    const hc = G.cam_to_local(virtual_cam(cal.cameras[0]), live.fused.hip);
+    const dist = G.v_len(hc);
+    const len = Math.hypot(C.x, C.y, C.z);
+    if (!(len > 0) || !(dist > 0.3)) return null;
+    if (live.pos_ok) {
+      pos.ratios.push(len / dist);
+      if (pos.ratios.length > 600) pos.ratios.shift();
+      if (++pos.n % 15 == 0 && pos.ratios.length >= 45) {
+        const r = pos.ratios.slice().sort((a, b) => a - b);
+        pos.k = r[r.length >> 1];
+      }
+    }
+    if (!pos.k) return null;
+    return pos.k * dist / len;
+  }
+  catch (e) { return null; }
+}
+
+// ---------- feet ----------
+// The floor is at height 0 (calibration levels the room). A foot close to the floor
+// that isn't moving is "planted": it's kept exactly on the floor and held in place,
+// so standing feet don't slide or jitter. Feet never go below the floor.
+
+const FOOT = { L: [27, 29, 31], R: [28, 30, 32] };
+const feet = { L: null, R: null };
+
+function plant_feet(fused, now) {
+  if (!settings.feet || !settings.calibration) return;
+  for (const side of ['L', 'R']) {
+    const idx = FOOT[side];
+    const pts = idx.map(j => fused.points[j]);
+    if (pts.some(p => !p)) { feet[side] = null; continue; }
+    let low = Math.min(...pts.map(p => p[1]));
+    const shift = (dx, dy, dz) => idx.forEach(j => { fused.points[j] = G.v_add(fused.points[j], [dx, dy, dz]); });
+    if (low < 0) { shift(0, -low, 0); low = 0; }
+    const c = [pts.reduce((s, p) => s + p[0], 0) / 3, pts.reduce((s, p) => s + p[2], 0) / 3];
+    const st = feet[side] || (feet[side] = { smooth: c, t: now, anchor: null });
+    const dt = Math.max(1e-3, (now - st.t) / 1000);
+    // judge movement on a smoothed position, so tracking jitter doesn't count as moving
+    const prev = st.smooth;
+    st.smooth = [prev[0] + (c[0] - prev[0]) * 0.3, prev[1] + (c[1] - prev[1]) * 0.3];
+    const speed = Math.hypot(st.smooth[0] - prev[0], st.smooth[1] - prev[1]) / dt;
+    st.t = now;
+    if (low < 0.04 && speed < 0.3) {
+      shift(0, -low, 0);
+      const cur = idx.map(j => fused.points[j]);
+      // planted: hold the whole foot where it is, only following very slowly
+      if (!st.anchor || Math.hypot(c[0] - st.anchor.c[0], c[1] - st.anchor.c[1]) > 0.06) st.anchor = { c, pts: cur.map(p => p.slice()) };
+      else st.anchor.pts = st.anchor.pts.map((q, k) => [q[0] + (cur[k][0] - q[0]) * 0.05, q[1] + (cur[k][1] - q[1]) * 0.05, q[2] + (cur[k][2] - q[2]) * 0.05]);
+      idx.forEach((j, k) => { fused.points[j] = st.anchor.pts[k].slice(); });
+    }
+    else st.anchor = null;
+  }
 }
 
 // ---------- face ----------
@@ -695,6 +782,10 @@ function build_ui() {
       onchange: (e) => { settings.hands = e.target.checked; save_settings(); } }), ' Use the extra cameras for hands too']),
     el('label', {}, [el('input', { type: 'checkbox', checked: settings.face,
       onchange: (e) => { settings.face = e.target.checked; save_settings(); } }), ' Use the extra cameras for the face too']),
+    el('label', {}, [el('input', { type: 'checkbox', checked: settings.position_3d,
+      onchange: (e) => { settings.position_3d = e.target.checked; save_settings(); } }), ' Avatar position from 3D (walking, crouching, jumping)']),
+    el('label', {}, [el('input', { type: 'checkbox', checked: settings.feet,
+      onchange: (e) => { settings.feet = e.target.checked; save_settings(); } }), ' Keep feet on the floor']),
     el('label', {}, [el('input', { type: 'checkbox', checked: settings.show_button,
       onchange: (e) => { settings.show_button = e.target.checked; save_settings(); if (button) button.style.display = settings.show_button ? '' : 'none'; } }), ' Show the "3D" button (Ctrl+Shift+M always works)']),
     log_el,
@@ -753,6 +844,7 @@ function _ui_status() {
     if (cal.cameras.length != extra.length + 1) lines.push(`Needs ${cal.cameras.length - 1} extra camera(s) open, you have ${extra.length}.`);
     if (cal.cameras[0].label && cam0_label() && cal.cameras[0].label != cam0_label()) lines.push('Warning: camera 1 is a different camera than when calibrated.');
     lines.push(stats.active ? `3D active: ${stats.tri} joints triangulated, ${stats.mono} from one camera.` : '3D not active right now.');
+    if (stats.active && settings.position_3d) lines.push(pos.k ? 'Avatar position: from 3D.' : 'Avatar position: learning the distance scale. Stand facing camera 1 for a few seconds.');
     if (stats.active && settings.hands && live.hands) lines.push(`Hands (left/right): ${['L', 'R'].map(s => live.hands[s] ? (live.hands[s].source == 'tri' ? '3D' : 'one camera') : 'not seen').join(' / ')}.`);
   }
   if (stats.last_error) lines.push('Last error: ' + stats.last_error);
@@ -808,10 +900,47 @@ function auto_reopen() {
     clearInterval(timer);
     const own = cam0_device_id();
     navigator.mediaDevices.enumerateDevices().then(list => {
-      const ids = new Set(list.filter(d => d.kind == 'videoinput').map(d => d.deviceId));
+      const cams = list.filter(d => d.kind == 'videoinput' && d.deviceId);
+      const ids = new Set(cams.map(d => d.deviceId));
       for (const id of settings.extra_devices) if (id != own && ids.has(id)) open_extra(id);
+      const others = cams.filter(d => d.deviceId != own);
+      if (!settings.extra_devices.length && others.length && settings.setup_prompt != 'never') setup_prompt(others);
     }).catch(() => {});
   }, 1000);
+}
+
+// First time another camera is around: offer to set multi-camera up, so nobody
+// has to know the shortcut. Never switches a camera on by itself (it could be a
+// capture card or a virtual camera).
+function setup_prompt(others) {
+  if (document.getElementById('mc_prompt')) return;
+  const one = others.length == 1;
+  const name = one ? (others[0].label || 'another camera') : `${others.length} other cameras`;
+  const close = () => box.remove();
+  const btn = (text, fn, main) => el('button', { textContent: text, onclick: () => { close(); fn(); },
+    style: `margin:8px 6px 0 0;padding:6px 12px;border:0;border-radius:6px;cursor:pointer;font:inherit;color:#fff;background:${main ? '#5b5fc7' : '#3a3f5c'}` });
+  const box = el('div', { id: 'mc_prompt', style: 'position:fixed;left:50%;top:18%;transform:translateX(-50%);z-index:2147483002;max-width:380px;' +
+    'background:rgba(20,20,28,.97);color:#eee;font:14px/1.45 system-ui,sans-serif;border-radius:12px;padding:16px 18px;box-shadow:0 8px 30px rgba(0,0,0,.6)' }, [
+    el('div', { style: 'font-weight:600;font-size:15px;margin-bottom:6px', textContent: 'Another camera found' }),
+    el('div', { textContent: `Found ${name}. Use it together with this camera for 3D body, hand and face tracking?` }),
+    el('div', {}, [
+      btn('Set up', () => {
+        if (one) {
+          settings.extra_devices = [others[0].deviceId];
+          save_settings();
+          open_extra(others[0].deviceId);
+          ui_log('Camera added. Next: click "Calibrate" and walk around for 30 seconds where both cameras can see you.');
+        }
+        else ui_log('Tick the cameras you want to use, then click "Calibrate".');
+        if (panel && panel.style.display != 'block') toggle_panel();
+      }, true),
+      btn('Not now', () => {}),
+      btn('Don\'t ask again', () => { settings.setup_prompt = 'never'; save_settings(); }),
+    ]),
+    el('div', { style: 'color:#99a;font-size:12px;margin-top:8px', textContent: 'You can always open this later with Ctrl+Shift+M or the 3D button.' }),
+  ]);
+  for (const ev of ['keydown', 'mousedown', 'mouseup', 'click', 'pointerdown', 'pointerup', 'wheel', 'touchstart', 'touchend']) box.addEventListener(ev, (e) => e.stopPropagation());
+  document.body.appendChild(box);
 }
 
 function start() {
@@ -829,7 +958,7 @@ window.MC_multicam = {
   get extra() { return extra; },
   get stats() { return stats; },
   toggle_panel,
-  _cam0_view: cam0_view, _label_votes: label_votes, face_mix,
+  _cam0_view: cam0_view, _label_votes: label_votes, face_mix, hip_depth_scale, _pos: pos, _feet: feet, _setup_prompt: setup_prompt,
   live, MIRROR, BLAZEPOSE, camera,
   layout_entry, layout_cams, use_layout_as_calibration, save_settings, ui_log,
   get calibration() { return settings.calibration; },

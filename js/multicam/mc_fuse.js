@@ -62,34 +62,52 @@ function create(calibration, options = {}) {
       if (r) { points[j] = r.X; score[j] = r.score; source[j] = 'tri'; n_views[j] = r.n; }
     }
 
-    let hip = (points[23] && points[24]) ? G.v_scale(G.v_add(points[23], points[24]), 0.5) : null;
+    // each camera's own body shape (MediaPipe world landmarks), relative to the hip
+    // centre and turned into room axes, averaged over the cameras that see the joint
+    const rel = new Array(n_joints).fill(null);
+    for (let j = 0; j < n_joints; j++) {
+      let acc = [0,0,0], wsum = 0;
+      views.forEach((v, ci) => {
+        if (!v || !v.wl || !cams[ci].solved) return;
+        const l = v.lm[j];
+        if (!l || l.vis < mono_vis) return;
+        const h = G.v_scale(G.v_add([v.wl[23].x, v.wl[23].y, v.wl[23].z], [v.wl[24].x, v.wl[24].y, v.wl[24].z]), 0.5);
+        const rel_cam = G.v_sub([v.wl[j].x, v.wl[j].y, v.wl[j].z], h);
+        acc = G.v_add(acc, G.v_scale(G.m3_v(G.m3_T(cams[ci].R), rel_cam), l.vis));
+        wsum += l.vis;
+      });
+      if (wsum > 0) rel[j] = { rel: G.v_scale(acc, 1 / wsum), score: Math.min(0.6, wsum) };
+    }
 
-    // single-camera fallback, anchored at the hips
-    const mono = new Array(n_joints).fill(null);
-    let mono_hip = null;
-    {
-      // hip estimate from mono data if triangulation lost the hips: needs a previous hip
+    // hip centre: from both hips if both are measured in 3D. Otherwise from every
+    // joint that is measured, minus where that joint sits relative to the hips.
+    // (A side camera often sees only the near hip well; holding the last hip there
+    // froze the whole body in place.)
+    let hip = (points[23] && points[24]) ? G.v_scale(G.v_add(points[23], points[24]), 0.5) : null;
+    let hip_from = hip ? 'tri' : null;
+    if (!hip) {
+      const cands = [];
       for (let j = 0; j < n_joints; j++) {
-        if (points[j]) continue;
-        let acc = [0,0,0], wsum = 0;
-        views.forEach((v, ci) => {
-          if (!v || !v.wl || !cams[ci].solved) return;
-          const l = v.lm[j];
-          if (!l || l.vis < mono_vis) return;
-          const h = G.v_scale(G.v_add([v.wl[23].x, v.wl[23].y, v.wl[23].z], [v.wl[24].x, v.wl[24].y, v.wl[24].z]), 0.5);
-          const rel_cam = G.v_sub([v.wl[j].x, v.wl[j].y, v.wl[j].z], h);
-          const rel_w = G.m3_v(G.m3_T(cams[ci].R), rel_cam);
-          acc = G.v_add(acc, G.v_scale(rel_w, l.vis));
-          wsum += l.vis;
-        });
-        if (wsum > 0) mono[j] = { rel: G.v_scale(acc, 1 / wsum), score: Math.min(0.6, wsum) };
+        if (points[j] && rel[j]) cands.push({ X: G.v_sub(points[j], rel[j].rel), w: score[j] * ((j >= 11 && j <= 12) || (j >= 23 && j <= 28) ? 2 : 1) });
+      }
+      if (cands.length >= 3) {
+        // weighted mean, then drop the worst third and average again
+        const mean = (cs) => { let a = [0,0,0], ws = 0; for (const c of cs) { a = G.v_add(a, G.v_scale(c.X, c.w)); ws += c.w; } return G.v_scale(a, 1 / ws); };
+        const m0 = mean(cands);
+        const keep = cands.map(c => ({ c, d: G.v_len(G.v_sub(c.X, m0)) })).sort((a, b) => a.d - b.d)
+          .slice(0, Math.max(3, Math.ceil(cands.length * 2 / 3))).map(x => x.c);
+        hip = mean(keep);
+        hip_from = 'joints';
       }
     }
+    const mono = rel.map((r, j) => (points[j] ? null : r));
+    let mono_hip = null;
 
     if (!hip) {
       hip = last_hip;
       if (!hip) return null;
       mono_hip = true;
+      hip_from = 'held';
     }
 
     for (let j = 0; j < n_joints; j++) {
@@ -115,7 +133,7 @@ function create(calibration, options = {}) {
     }
 
     last_hip = hip;
-    return { points, score, source, n_views, hip, hip_held: !!mono_hip };
+    return { points, score, source, n_views, hip, hip_held: !!mono_hip, hip_from };
   }
 
   function reset() {

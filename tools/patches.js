@@ -19,6 +19,14 @@ module.exports = [
   },
   {
     file: 'js/SA_system_emulation.min.js',
+    what: 'avatar position hook',
+    // XR Animator's hip position: a ray through the hips in camera 1's picture times a guessed distance
+    anchor: 'C.lerp(u.multiplyScalar(-h/u.z).add(z),1-m)}',
+    where: 'after',
+    insert: 'if(window.MC_multicam){const _mc=MC_multicam.hip_depth_scale(C);if(_mc)C.multiplyScalar(_mc)}',
+  },
+  {
+    file: 'js/SA_system_emulation.min.js',
     what: 'face (ARKit) hook',
     anchor: 'V[Ge["mouthPucker"]].score=Math.pow(Math.max(V[Ge["mouthPucker"]].score-G,0)/(1-G),2);',
     where: 'after',

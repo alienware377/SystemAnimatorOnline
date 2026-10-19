@@ -40,9 +40,12 @@ CAMERA PLACEMENT
 FIRST-TIME SETUP
 ----------------
 1. Start XR Animator and start its camera like normal (that's camera 1).
-2. Press Ctrl+Shift+M, or click the small "3D" button bottom-left.
-3. Under "Extra cameras", tick your second camera. Wait until it shows fps
-   (the tracker takes a few seconds to load).
+2. A box pops up: "Another camera found". Click "Set up" (if you have
+   several other cameras, tick the one you want in the panel that opens).
+   No pop-up? Press Ctrl+Shift+M, or click the small "3D" button
+   bottom-left, and tick your second camera under "Extra cameras".
+3. Wait until the second camera shows fps (its tracker takes a few seconds
+   to load).
 4. Optional: type your height in cm. It makes distances more exact.
 5. Click "Calibrate". After the 5 second countdown, for 30 seconds:
    walk around slowly inside the area both cameras see, turn left and
@@ -52,8 +55,10 @@ FIRST-TIME SETUP
 7. "Use multi-camera 3D" is on by default. The status line shows how many
    joints are being measured in 3D.
 
-The calibration is remembered. "Save file" / "Load file" keeps a copy.
-Your extra cameras reopen automatically next time.
+You only do this once. After that everything is automatic every time you
+start XR Animator's camera: the extra cameras reopen, the calibration is
+remembered and 3D tracking switches itself on. No shortcut needed.
+"Save file" / "Load file" keeps a copy of the calibration.
 
 Rough layout (optional): in the Live view's Layout tab, drag the cameras
 to roughly where they are and set their height and field of view. With
@@ -146,8 +151,14 @@ GOOD TO KNOW
   cameras for the face too" to go back to camera 1 only.
 - Blendshape names with Japanese (or other non-English) letters now
   arrive correctly in VNyan. XR Animator's VMC sender used to garble them.
-- Avatar position (walking around) still uses XR Animator's own method, but
-  it now gets much cleaner data.
+- Avatar position (walking, crouching, jumping) comes from the real 3D
+  distance to your hips. It first learns XR Animator's distance scale for
+  your avatar: stand facing camera 1 for a few seconds after starting (the
+  panel says when it's done). Untick "Avatar position from 3D" to use XR
+  Animator's own estimate instead.
+- Keep feet on the floor: calibration knows where the floor is, so feet
+  never sink into it, and a foot that stands still is held in place
+  instead of jittering. Steps still move it right away.
 - Each extra camera runs its own tracker, so it uses more CPU/GPU. If the
   tablet struggles, lower XR Animator's camera resolution.
 - "Keep the avatar level" ignores camera 1's tilt. Turn it off to get the

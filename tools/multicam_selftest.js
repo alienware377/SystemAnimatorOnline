@@ -252,5 +252,34 @@ function hand_test() {
 }
 all = hand_test() && all;
 
+// ---------- hip centre when one hip is only seen by one camera ----------
+function hip_test() {
+  console.log('\n=== body centre: side camera barely sees the far hip ===');
+  const cams = [look_at([0, 1.3, 2.6], [0, 1.0, 0], 62, W, H), look_at([2.4, 1.6, 0.8], [0, 1.0, 0], 75, W, H)];
+  const cal = { cameras: cams.map(c => Object.assign({ solved: true }, c)) };
+  const fuser = FUSE.create(cal);
+  const errs = [];
+  let ok = true;
+  for (let i = 0; i < 120; i++) {
+    const t = 50 + i / 10;
+    const { J, Ry } = make_frame(t, 0.2);
+    const v0 = observe(cams[0], J, Ry, { noise: 1.5, outliers: 0 });
+    const v1 = observe(cams[1], J, Ry, { noise: 1.5, outliers: 0 });
+    if (!v0 || !v1) continue;
+    // camera 2 hardly sees the right hip (and right leg)
+    for (const j of [24, 26, 28, 30, 32]) v1.lm[j].vis = 0.3;
+    const r = fuser.fuse([v0, v1]);
+    if (!r) { ok = false; continue; }
+    const hip_true = G.v_scale(G.v_add(J[23], J[24]), 0.5);
+    errs.push(G.v_len(G.v_sub(r.hip, hip_true)));
+  }
+  errs.sort((a, b) => a - b);
+  const med = errs[errs.length >> 1], p90 = errs[Math.floor(errs.length * 0.9)];
+  const pass = ok && med < 0.03 && p90 < 0.06;
+  console.log(`  ${pass ? 'PASS' : 'FAIL'} body centre error: median ${(med * 100).toFixed(2)} cm, 90th pct ${(p90 * 100).toFixed(2)} cm (limits 3 / 6 cm)`);
+  return pass;
+}
+all = hip_test() && all;
+
 console.log('\n' + (all ? 'SELFTEST OK' : 'SELFTEST FAILED'));
 process.exit(all ? 0 : 1);

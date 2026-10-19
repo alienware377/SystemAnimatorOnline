@@ -10,11 +10,12 @@
 > - **Live view:** each camera with its tracked skeleton and the 3D result drawn back on top, an orbitable 3D room view, and the layout editor.
 > - **Face blendshapes:** live ARKit values, and mapping onto any blendshape names (ARKit / Perfect Sync, VRM 0 and VRM 1 presets, MMD morphs, the avatar's own, or custom). Matching is automatic, with manual overrides and per-blendshape strength, input range, curve and smoothing, like VNyan. Results go out over VMC and onto XR Animator's avatar.
 > - **Tongue tracking (experimental):** a separate mouth detector with a quick tongue-in / tongue-out calibration drives `tongueOut`, which the face tracker can't see on its own.
+> - **Real position and grounded feet:** the avatar's position (walking, crouching, jumping) comes from the real 3D distance, feet stay on the floor and standing feet don't slide.
 > - **Fix:** blendshape names with Japanese or other non-English letters now arrive intact over VMC.
 >
 > **Install:** download `XRA-MultiCam.zip` from [Releases](../../releases), unzip it next to (or anywhere near) your XR Animator v0.35.0 desktop app, and run `install.bat`. It finds XR Animator, backs up the files it touches, and `uninstall.bat` puts them back. Full instructions, including sending VMC to VNyan on another PC over Wi-Fi or a USB-to-Ethernet cable, are in the zip's `README.txt`. This repository itself is also the already-patched app folder.
 >
-> In XR Animator: **Ctrl+Shift+M** opens the multi-camera panel, **Ctrl+Shift+L** the live view.
+> The first time XR Animator's camera starts and another camera is around, a pop-up offers to set it up. After setup it all runs by itself; **Ctrl+Shift+M** (multi-camera panel) and **Ctrl+Shift+L** (live view) are only for changing things.
 >
 > **License:** same as XR Animator, [CC BY-NC-SA 4.0](http://creativecommons.org/licenses/by-nc-sa/4.0/): credit the original, non-commercial use only, share changes under the same license. The new code lives in `js/multicam/`; the hooks into XR Animator's own files are listed in `tools/patches.js`.
 

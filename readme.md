@@ -10,6 +10,7 @@
 > - **Live view:** each camera with its tracked skeleton and the 3D result drawn back on top, an orbitable 3D room view, and the layout editor.
 > - **Face blendshapes:** live ARKit values, and mapping onto any blendshape names (ARKit / Perfect Sync, VRM 0 and VRM 1 presets, MMD morphs, the avatar's own, or custom). Matching is automatic, with manual overrides and per-blendshape strength, input range, curve and smoothing, like VNyan. Results go out over VMC and onto XR Animator's avatar.
 > - **Tongue tracking (experimental):** a separate mouth detector with a quick tongue-in / tongue-out calibration drives `tongueOut`, which the face tracker can't see on its own.
+> - **Phones and tablets as cameras:** iPhones, Android phones and tablets join over Wi-Fi by scanning a QR code, no app needed. The phone tracks itself and sends only the results.
 > - **Real position and grounded feet:** the avatar's position (walking, crouching, jumping) comes from the real 3D distance, feet stay on the floor and standing feet don't slide.
 > - **Fix:** blendshape names with Japanese or other non-English letters now arrive intact over VMC.
 >

@@ -109,7 +109,7 @@ foreach ($f in $files) {
 # 4. copy files
 $dst = Join-Path $root 'js\multicam'
 New-Item -ItemType Directory -Force $dst | Out-Null
-Copy-Item (Join-Path $here 'files\js\multicam\*.js') $dst -Force
+Copy-Item (Join-Path $here 'files\js\multicam\*') $dst -Force
 Write-Host "copied js\multicam"
 
 # 5. write the patched files

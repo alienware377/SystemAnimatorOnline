@@ -40,6 +40,10 @@ const settings = Object.assign({
   position_3d: true,      // avatar position (walking, crouching, jumping) from the real 3D distance
   feet: true,             // keep feet on the floor and stop them sliding while they stand still
   setup_prompt: 'ask',    // 'ask' = offer setup when another camera is found, 'never' = don't
+  phones_server: false,   // let phones connect as cameras (remembered, so phones can reconnect)
+  phone_port: 39600,
+  phone_token: '',        // part of the phone link; "New link" changes it
+  phone_names: {},
   layout: [],             // rough camera layout from the Layout tab: [{ x, z, h, fov }] in metres / degrees
   layout_hint: true,      // give that layout to Calibrate as a starting guess
 }, load_settings());
@@ -79,7 +83,7 @@ function cam0_label() {
 function current_sizes() {
   const C = camera();
   return [{ width: C?.video_canvas?.width || 1280, height: C?.video_canvas?.height || 720 }]
-    .concat(extra.map(c => ({ width: c.w || c.video.videoWidth || 1280, height: c.h || c.video.videoHeight || 720 })));
+    .concat(extra.map(c => ({ width: c.w || c.video?.videoWidth || 1280, height: c.h || c.video?.videoHeight || 720 })));
 }
 
 function default_layout(i) {
@@ -132,6 +136,7 @@ if (settings.calibration) {
 
 async function open_extra(deviceId) {
   if (extra.some(c => c.deviceId == deviceId)) return;
+  if (is_phone(deviceId)) { extra.push(make_phone(deviceId)); ui_refresh(true); return; }
   const cam = {
     deviceId, label: '', video: document.createElement('video'), stream: null,
     worker: null, ready: false, busy: false, history: [], frame_id: 0,
@@ -202,6 +207,7 @@ function close_extra(deviceId) {
   if (i < 0) return;
   const cam = extra[i];
   cam.closed = true;
+  if (cam.remote) { cam.conn?.send({ type: 'bye' }); cam.conn?.close(); }
   cam.stream?.getTracks().forEach(t => t.stop());
   cam.worker?.terminate();
   extra.splice(i, 1);
@@ -217,7 +223,8 @@ function view_at(cam, t) {
     if (r.ts <= t && (!a || r.ts > a.ts)) a = r;
     if (r.ts >= t && (!b || r.ts < b.ts)) b = r;
   }
-  const max_gap = 70;
+  // phones arrive over Wi-Fi with more timing jitter, so they get a wider window
+  const max_gap = cam.remote ? 120 : 70;
   if (a && b && a !== b && b.ts - a.ts < 2 * max_gap) {
     const k = (t - a.ts) / (b.ts - a.ts);
     const lerp = (p, q) => p + (q - p) * k;
@@ -297,7 +304,7 @@ function _process(result) {
     if (!recording.cams_info) {
       const C = camera();
       recording.cams_info = [{ width: C.video_canvas.width, height: C.video_canvas.height, label: cam0_label() }]
-        .concat(extra.map(c => ({ width: c.w || c.video.videoWidth, height: c.h || c.video.videoHeight, label: c.label, deviceId: c.deviceId })));
+        .concat(extra.map(c => ({ width: c.w || c.video?.videoWidth || 1280, height: c.h || c.video?.videoHeight || 720, label: c.label, deviceId: c.deviceId })));
       recording.n_cams = recording.cams_info.length;
     }
     if (views_norm.length == recording.n_cams && views_norm.filter(Boolean).length >= 2) {
@@ -765,6 +772,7 @@ function build_ui() {
     list_el,
     el('button', { textContent: 'Refresh list', onclick: () => ui_refresh(true) }),
     el('button', { textContent: 'Live view', title: 'Cameras, 3D view, layout and face (Ctrl+Shift+L)', onclick: () => window.MC_view?.toggle() }),
+    build_phones_ui(),
     el('h4', { textContent: 'Calibration' }),
     el('label', {}, ['Your height (cm, optional): ',
       el('input', { type: 'text', value: settings.user_height_cm, oninput: (e) => { settings.user_height_cm = e.target.value; save_settings(); } })]),
@@ -834,7 +842,10 @@ function _ui_status() {
   const cal = settings.calibration;
   const lines = [];
   lines.push(`Camera 1 (XR Animator): ${cam0_label() || 'not started'}, ${stats.cam0_fps.toFixed(0)} fps`);
-  extra.forEach((c, i) => lines.push(`Camera ${i + 2}: ${c.error ? 'ERROR ' + c.error : (c.ready ? (c.fps || 0).toFixed(0) + ' fps' : 'loading tracker...')}`));
+  extra.forEach((c, i) => lines.push(`Camera ${i + 2}${c.remote ? ' (' + c.label + ')' : ''}: ` + (c.error ? 'ERROR ' + c.error
+    : c.remote && !c.connected ? 'phone not connected'
+    : c.ready ? (c.fps || 0).toFixed(0) + ' fps' : (c.remote ? 'phone connected, waiting for its camera' : 'loading tracker...'))));
+  if (phones_state().running) lines.push(`Phones can connect at ${phones_state().urls[0] || ''}`);
   if (recording) lines.push(`Recording... ${Math.max(0, (recording.until - performance.now()) / 1000).toFixed(0)} s left, ${recording.samples.length} frames`);
   else if (calibrating) lines.push('Calculating calibration...');
   else if (!cal) lines.push('Not calibrated yet.');
@@ -862,7 +873,7 @@ async function ui_refresh(relist) {
     list_el.querySelectorAll('.mc_cam').forEach(row => {
       const cam = extra.find(c => c.deviceId == row.dataset.id);
       const v = row.querySelector('video');
-      if (cam?.stream && v.srcObject !== cam.stream) { v.srcObject = cam.stream; v.play().catch(() => {}); }
+      if (v && cam?.stream && v.srcObject !== cam.stream) { v.srcObject = cam.stream; v.play().catch(() => {}); }
       row.querySelector('input').checked = !!cam;
     });
     return;
@@ -875,6 +886,19 @@ async function ui_refresh(relist) {
   // before camera permission is granted, devices come back with empty ids
   const others = devices.filter(d => d.deviceId && d.deviceId != own);
   if (!others.length) list_el.append(el('div', { className: 'mc_small', textContent: 'No other cameras found (start XR Animator\'s camera first so labels show up).' }));
+  for (const cam of extra.filter(c => c.remote)) {
+    const row = el('div', { className: 'mc_cam' }, [
+      el('input', { type: 'checkbox', checked: true, title: 'Untick to stop using this phone', onchange: () => {
+        settings.extra_devices = settings.extra_devices.filter(x => x != cam.deviceId);
+        close_extra(cam.deviceId);
+        save_settings();
+      } }),
+      cam.preview ? el('img', { src: cam.preview.src, style: 'width:96px;height:54px;object-fit:cover;border-radius:4px;background:#000' }) : el('div', { style: 'width:96px;height:54px;background:#000;border-radius:4px' }),
+      el('span', { textContent: `${cam.label} (phone, ${cam.connected ? 'connected' : 'not connected'})` }),
+    ]);
+    row.dataset.id = cam.deviceId;
+    list_el.append(row);
+  }
   for (const d of others) {
     const cam = extra.find(c => c.deviceId == d.deviceId);
     const v = el('video', { muted: true, playsInline: true, autoplay: true });
@@ -893,6 +917,115 @@ async function ui_refresh(relist) {
   }
 }
 
+// ---------- phone cameras ----------
+// Phones open a page this app serves (mc_remote_server.js), track themselves, and
+// send results here. Each phone is an extra camera like a webcam: same history,
+// same fusion, same calibration. It's remembered by an id the phone keeps, so it
+// slots back into its place after a reconnect.
+
+const is_phone = (id) => typeof id == 'string' && id.startsWith('phone:');
+const phones_state = () => window.MC_remote_server?.state || { running: false, urls: [] };
+
+function make_phone(id, name) {
+  return { deviceId: id, label: name || settings.phone_names[id] || 'Phone', remote: true, video: null, stream: null, worker: null,
+    ready: false, busy: false, history: [], frame_id: 0, fps: 0, n: 0, t: performance.now(), error: '', closed: false,
+    conn: null, connected: false, preview: null };
+}
+
+function phone_token() {
+  if (!settings.phone_token) {
+    settings.phone_token = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+    save_settings();
+  }
+  return settings.phone_token;
+}
+
+async function phones_start(host) {
+  const S = window.MC_remote_server;
+  if (!S?.available) { ui_log('Phone cameras need the XR Animator desktop app.'); return; }
+  const st = await S.start({ port: settings.phone_port, host, token: phone_token(), on_connection: on_phone });
+  if (!st.running) { ui_log('Could not let phones connect: ' + (st.error || 'unknown error')); return; }
+  settings.phones_server = true;
+  save_settings();
+  phones_ui_update();
+}
+
+function phones_stop() {
+  window.MC_remote_server?.stop();
+  settings.phones_server = false;
+  save_settings();
+  extra.filter(c => c.remote).forEach(c => { c.conn?.close(); c.conn = null; c.connected = false; c.ready = false; });
+  phones_ui_update();
+}
+
+function on_phone(conn, hello) {
+  const id = 'phone:' + String(hello.id).replace(/[^\w-]/g, '').slice(0, 32);
+  const name = String(hello.name || 'Phone').slice(0, 40);
+  let cam = extra.find(c => c.deviceId == id);
+  if (!cam) {
+    cam = make_phone(id, name);
+    extra.push(cam);
+    settings.extra_devices = [...new Set(settings.extra_devices.concat(id))];
+    ui_log(`Phone "${name}" connected and added. ${settings.calibration ? 'Calibrate again so it gets a place in the room.' : ''}`);
+  }
+  if (cam.conn && cam.conn !== conn) cam.conn.close();
+  Object.assign(cam, { conn, connected: true, label: name, closed: false });
+  settings.phone_names[id] = name;
+  save_settings();
+  conn.send({ type: 'welcome', settings: { hands: settings.hands, face: settings.face, model_quality: settings.model_quality } });
+  conn.onmessage = (m) => on_phone_message(cam, conn, m);
+  conn.onclose = () => { if (cam.conn === conn) { cam.conn = null; cam.connected = false; cam.ready = false; ui_refresh(true); } };
+  ui_refresh(true);
+}
+
+function on_phone_message(cam, conn, m) {
+  if (cam.conn !== conn) return;
+  if (m.type == 'ping') conn.send({ type: 'pong', t0: m.t0, t1: performance.now() });
+  else if (m.type == 'result') {
+    cam.ready = true;
+    cam.busy = true;   // on_worker_message clears it
+    on_worker_message(cam, { type: 'result', ts: +m.ts, w: m.w, h: m.h, landmarks: m.landmarks, worldLandmarks: m.worldLandmarks, hands: m.hands || null, face: m.face || null });
+  }
+  else if (m.type == 'preview' && typeof m.jpeg == 'string' && m.jpeg.startsWith('data:image/jpeg')) {
+    const img = new Image();
+    img.onload = () => { cam.preview = img; };
+    img.src = m.jpeg;
+  }
+  else if (m.type == 'hello') { cam.label = String(m.name || cam.label).slice(0, 40); }
+  else if (m.type == 'stopped') { cam.ready = false; }
+}
+
+let phones_box = null;
+function build_phones_ui() {
+  phones_box = el('div');
+  phones_ui_update();
+  return el('div', {}, [el('h4', { textContent: 'Phone cameras' }), phones_box]);
+}
+
+function phones_ui_update() {
+  if (!phones_box) return;
+  phones_box.textContent = '';
+  const S = window.MC_remote_server;
+  if (!S?.available) { phones_box.append(el('div', { className: 'mc_small', textContent: 'Phones and tablets can be cameras too, in the XR Animator desktop app.' })); return; }
+  const st = S.state;
+  if (!st.running) {
+    phones_box.append(
+      el('div', { className: 'mc_small', textContent: 'Use iPhones, Android phones or tablets as extra cameras over Wi-Fi. No app needed.' }),
+      el('button', { textContent: 'Let phones connect', onclick: () => phones_start() }));
+    return;
+  }
+  const url = st.urls[0] || '';
+  const qr = el('canvas', { style: 'width:150px;height:150px;image-rendering:pixelated;border-radius:6px;display:block;margin:6px 0' });
+  try { window.MC_qr.draw(qr, url, 4, 3); } catch (e) {}
+  phones_box.append(
+    el('div', { className: 'mc_small', textContent: 'On the phone (same Wi-Fi): scan this, or open the address below in Safari / Chrome.' }),
+    qr,
+    el('div', { style: 'font:12px monospace;word-break:break-all;user-select:text;white-space:pre-line', textContent: st.urls.join('\n') }),
+    el('div', { className: 'mc_small', style: 'margin-top:4px', textContent: 'The first time, the phone warns that the connection is not private (this PC made its own certificate). Tap "Advanced" then "Proceed" (Android), or "Show Details" then "visit this website" (iPhone). Then allow the camera and tap "Start camera". If nothing connects, allow XR Animator through the Windows firewall for private networks.' }),
+    el('button', { textContent: 'Stop phones connecting', onclick: phones_stop }),
+    el('button', { textContent: 'New link', title: 'Old links stop working', onclick: () => { settings.phone_token = ''; phones_stop(); phones_start(); } }));
+}
+
 // reopen the extra cameras from last time, once XR Animator's own camera is running
 function auto_reopen() {
   const timer = setInterval(() => {
@@ -902,7 +1035,7 @@ function auto_reopen() {
     navigator.mediaDevices.enumerateDevices().then(list => {
       const cams = list.filter(d => d.kind == 'videoinput' && d.deviceId);
       const ids = new Set(cams.map(d => d.deviceId));
-      for (const id of settings.extra_devices) if (id != own && ids.has(id)) open_extra(id);
+      for (const id of settings.extra_devices) if (is_phone(id) || (id != own && ids.has(id))) open_extra(id);
       const others = cams.filter(d => d.deviceId != own);
       if (!settings.extra_devices.length && others.length && settings.setup_prompt != 'never') setup_prompt(others);
     }).catch(() => {});
@@ -946,6 +1079,7 @@ function setup_prompt(others) {
 function start() {
   build_ui();
   auto_reopen();
+  if (settings.phones_server) phones_start();
 }
 
 if (document.readyState == 'complete') start();
@@ -958,6 +1092,7 @@ window.MC_multicam = {
   get extra() { return extra; },
   get stats() { return stats; },
   toggle_panel,
+  phones_start, phones_stop, _on_phone: on_phone,
   _cam0_view: cam0_view, _label_votes: label_votes, face_mix, hip_depth_scale, _pos: pos, _feet: feet, _setup_prompt: setup_prompt,
   live, MIRROR, BLAZEPOSE, camera,
   layout_entry, layout_cams, use_layout_as_calibration, save_settings, ui_log,

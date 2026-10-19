@@ -6,3 +6,6 @@ node_modules/OSC-js/
 node_modules/nut.js/
 au3/*.exe
 au3/*/*.exe
+
+# phone camera certificate (private key), made per PC
+TEMP/multicam_phone_cert.json

@@ -185,7 +185,7 @@ function build_cameras() {
     ctx.clearRect(0, 0, w, h);
     const C = mc.camera();
     const tiles = [{ label: 'Camera 1 (XR Animator)', src: C?.video_canvas, kind: 0 }]
-      .concat(mc.extra.map((c, i) => ({ label: `Camera ${i + 2}: ${c.label || ''}`, src: c.video, cam: c, kind: i + 1 })));
+      .concat(mc.extra.map((c, i) => ({ label: `Camera ${i + 2}: ${c.label || ''}${c.remote ? (c.connected ? ' (phone)' : ' (phone, not connected)') : ''}`, src: c.remote ? c.preview : c.video, cam: c, kind: i + 1 })));
     const cols = tiles.length <= 1 ? 1 : (w / h > 1.2 ? Math.min(tiles.length, 3) : Math.ceil(tiles.length / 2));
     const rows = Math.ceil(tiles.length / cols);
     const tw = w / cols, th = h / rows;

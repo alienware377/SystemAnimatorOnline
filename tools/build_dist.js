@@ -10,7 +10,8 @@ const out = path.join(root, 'dist', 'XRA-MultiCam');
 fs.rmSync(path.join(root, 'dist'), { recursive: true, force: true });
 fs.mkdirSync(path.join(out, 'files', 'js', 'multicam'), { recursive: true });
 
-const SHIP = ['mc_geometry.js', 'mc_calibrate.js', 'mc_fuse.js', 'mc_face.js', 'mc_tongue.js', 'mc_main.js', 'mc_view.js', 'mc_pose_worker.js', 'mc_calib_worker.js', 'mc_tongue_worker.js'];
+const SHIP = ['mc_geometry.js', 'mc_calibrate.js', 'mc_fuse.js', 'mc_face.js', 'mc_tongue.js', 'mc_main.js', 'mc_view.js', 'mc_pose_worker.js', 'mc_calib_worker.js', 'mc_tongue_worker.js',
+  'mc_qr.js', 'mc_remote_server.js', 'mc_phone.js', 'phone.html'];
 for (const f of SHIP) {
   fs.copyFileSync(path.join(root, 'js', 'multicam', f), path.join(out, 'files', 'js', 'multicam', f));
 }

@@ -68,6 +68,31 @@ which helps with tricky setups (for example one camera behind you).
 it's less exact than a real calibration.
 
 
+PHONES AND TABLETS AS CAMERAS (Wi-Fi)
+-------------------------------------
+iPhones, Android phones and tablets can be extra cameras too, with no app:
+the phone tracks you itself and sends only the results, so it barely adds
+any load to the PC.
+
+1. In the 3D panel (Ctrl+Shift+M), under "Phone cameras", click "Let
+   phones connect". The first time, Windows may ask whether XR Animator
+   may use the network: allow it for private networks.
+2. On the phone (same Wi-Fi as this PC), scan the QR code with the camera
+   app, or type the address shown under it into Safari or Chrome.
+3. The phone warns that the connection is not private. That's expected:
+   this PC made its own certificate. Tap "Show Details" then "visit this
+   website" (iPhone), or "Advanced" then "Proceed" (Android). Only needed
+   once per phone.
+4. Allow the camera, pick front or back camera, and tap "Start camera".
+   The phone shows up as the next camera in the panel and the live view.
+5. Place the phone where it sees your whole body, then Calibrate as usual.
+
+Keep the phone's screen on with the page open (it asks the phone to stay
+awake). Phones are remembered: after a restart, just open the page on the
+phone again and it slots back into its place in the calibration. "New
+link" in the panel makes old links stop working.
+
+
 LIVE VIEW (Ctrl+Shift+L, or "Live view" in the 3D panel)
 ---------------------------------------------------------
 - Cameras: every camera's picture with its skeleton. Green = measured in

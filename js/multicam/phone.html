@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12121a">
+<title>XR Animator phone camera</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #12121a; color: #eee; font: 16px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 20px; margin: 4px 0 10px; }
+  .card { background: #1d1d2a; border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+  label { display: block; margin: 8px 0 4px; color: #aab; font-size: 14px; }
+  input, select { width: 100%; box-sizing: border-box; background: #262636; color: #eee; border: 1px solid #3a3a52; border-radius: 8px; padding: 10px; font: inherit; }
+  button { width: 100%; padding: 14px; margin-top: 12px; border: 0; border-radius: 10px; font: 600 17px system-ui, sans-serif; color: #fff; background: #5b5fc7; }
+  button.secondary { background: #3a3f5c; }
+  #status { font-size: 15px; }
+  .ok { color: #86efac; } .warn { color: #fde68a; } .bad { color: #fca5a5; }
+  #view { position: relative; width: 100%; background: #000; border-radius: 10px; overflow: hidden; margin-top: 10px; }
+  #view video, #view canvas { width: 100%; display: block; }
+  #view canvas { position: absolute; left: 0; top: 0; height: 100%; }
+  .small { color: #99a; font-size: 13px; }
+  .row { display: flex; gap: 10px; } .row > * { flex: 1; }
+</style>
+</head>
+<body>
+<main>
+  <h1>XR Animator phone camera</h1>
+  <div class="card">
+    <div id="status">Connecting to XR Animator...</div>
+    <div class="small" id="detail"></div>
+  </div>
+  <div class="card" id="setup">
+    <label for="name">Name for this camera</label>
+    <input id="name" maxlength="40">
+    <div class="row">
+      <div>
+        <label for="facing">Camera</label>
+        <select id="facing"><option value="environment">Back</option><option value="user">Front (selfie)</option></select>
+      </div>
+      <div>
+        <label for="res">Quality</label>
+        <select id="res"><option value="1280x720">Normal</option><option value="960x540">Light (older phones)</option></select>
+      </div>
+    </div>
+    <button id="start">Start camera</button>
+    <p class="small">Put the phone where it can see your whole body and keep this page open. You can lock the camera's position, but please don't move the phone after calibrating.</p>
+  </div>
+  <div id="view" hidden><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
+  <button id="stop" class="secondary" hidden>Stop</button>
+</main>
+<script src="mc_phone.js"></script>
+</body>
+</html>
